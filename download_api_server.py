@@ -10,6 +10,7 @@ from utils.video_editor import edit_video_to_65s
 import os
 import asyncio
 from typing import Optional
+import sys
 
 app = FastAPI(title="YouTube Download API", version="1.0.0")
 
@@ -35,24 +36,36 @@ async def download_video(request: DownloadRequest):
     """
     Download YouTube video và trả về đường dẫn file
     Có thể edit 65s nếu cần
+    GỌI TRỰC TIẾP để tối ưu tốc độ (giống dowloadstest.py)
     """
     from datetime import datetime
     
     try:
         download_path = os.path.join(os.getcwd(), "Downloads")
         
-        # Download video - chạy trong thread pool để không block
+        # Download video - GỌI TRỰC TIẾP (nhanh nhất, giống dowloadstest.py)
+        # Dùng asyncio.to_thread() để không block event loop nhưng vẫn nhanh
         download_start = datetime.now()
-        loop = asyncio.get_event_loop()
         
-        video_file = await loop.run_in_executor(
-            None,
-            download_youtube_video,
-            request.url,
-            download_path,
-            request.max_resolution,
-            request.progressive_only
-        )
+        # Python 3.9+: dùng to_thread (nhanh hơn), fallback về run_in_executor
+        if sys.version_info >= (3, 9):
+            video_file = await asyncio.to_thread(
+                download_youtube_video,
+                request.url,
+                download_path,
+                request.max_resolution,
+                request.progressive_only
+            )
+        else:
+            loop = asyncio.get_event_loop()
+            video_file = await loop.run_in_executor(
+                None,
+                download_youtube_video,
+                request.url,
+                download_path,
+                request.max_resolution,
+                request.progressive_only
+            )
         
         download_time = (datetime.now() - download_start).total_seconds()
         
@@ -66,14 +79,17 @@ async def download_video(request: DownloadRequest):
         final_file = video_file
         edit_time = 0
         
-        # Edit nếu cần
+        # Edit nếu cần - GỌI TRỰC TIẾP (giống dowloadstest.py)
         if request.edit_65s:
             edit_start = datetime.now()
-            edited_file = await loop.run_in_executor(
-                None,
-                edit_video_to_65s,
-                video_file
-            )
+            
+            # Python 3.9+: dùng to_thread, fallback về run_in_executor
+            if sys.version_info >= (3, 9):
+                edited_file = await asyncio.to_thread(edit_video_to_65s, video_file)
+            else:
+                loop = asyncio.get_event_loop()
+                edited_file = await loop.run_in_executor(None, edit_video_to_65s, video_file)
+            
             edit_time = (datetime.now() - edit_start).total_seconds()
             
             if edited_file and os.path.exists(edited_file):

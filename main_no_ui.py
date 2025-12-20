@@ -54,6 +54,8 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         
         controller = profile_controllers[row]
         driver = controller.driver
+        
+        # BẮT ĐẦU TÍNH THỜI GIAN UPLOAD (từ lúc upload file đến click post thành công)
         upload_start_total = datetime.now()
         
         # Upload file
@@ -98,9 +100,15 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, wait_and_click_post)
+        
+        # KẾT THÚC TÍNH THỜI GIAN UPLOAD (sau khi redirect thành công)
+        upload_end_total = datetime.now()
         upload_times['wait_post_time'] = (datetime.now() - wait_post_start).total_seconds()
         
-        # Reload trang
+        # TỔNG THỜI GIAN UPLOAD = từ upload file đến click post thành công (KHÔNG tính reload)
+        upload_times['total_upload_time'] = (upload_end_total - upload_start_total).total_seconds()
+        
+        # Reload trang (KHÔNG tính vào total_upload_time)
         reload_start = datetime.now()
         def reload_upload_page():
             driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
@@ -113,8 +121,6 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         new_file_input = await loop.run_in_executor(None, reload_upload_page)
         upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
         file_inputs[row] = new_file_input
-        
-        upload_times['total_upload_time'] = (datetime.now() - upload_start_total).total_seconds()
         return True, upload_times
         
     except Exception as e:
@@ -187,8 +193,7 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
             print(f"Download: {download_time:.1f}s | Edit: {edit_time:.1f}s")
             print(f"Upload: {upload_times['total_upload_time']:.1f}s "
                   f"(File: {upload_times['file_upload_time']:.1f}s, "
-                  f"Processing: {upload_times['wait_post_time']:.1f}s, "
-                  f"ClickPost: {upload_times['post_click_time']:.1f}s)")
+                  f"Processing: {upload_times['wait_post_time']:.1f}s)")
             print(f"Total: {total_time:.1f}s")
             print(f"{'='*60}\n")
         
