@@ -239,16 +239,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📥 Downloading video..."))
             
-            # Download video về thư mục Downloads - DÙNG progressive_only=False như test
+            # Download video về thư mục Downloads - DÙNG TRỰC TIẾP như dowloadstest.py (nhanh hơn)
             download_start = datetime.now()
             download_path = os.path.join(os.getcwd(), "Downloads")
-            video_file = await asyncio.to_thread(
-                download_youtube_video,
-                video_url,
-                download_path=download_path,
-                max_resolution=720,
-                progressive_only=False  # Giống như dowloadstest.py để nhanh hơn
-            )
+            
+            # Chạy trực tiếp trong thread riêng (giống như dowloadstest.py) để tránh overhead
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    download_youtube_video,
+                    video_url,
+                    download_path,
+                    720,  # max_resolution
+                    False  # progressive_only=False - giống như dowloadstest.py
+                )
+                video_file = await asyncio.wrap_future(future)
             download_time = (datetime.now() - download_start).total_seconds()
             
             if not video_file or not os.path.exists(video_file):
@@ -264,11 +269,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✂️ Editing video to 65s..."))
                 edit_start = datetime.now()
                 
-                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất)
-                edited_file = await asyncio.to_thread(
-                    edit_video_to_65s,
-                    video_file
-                )
+                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - chạy trực tiếp
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(edit_video_to_65s, video_file)
+                    edited_file = await asyncio.wrap_future(future)
                 edit_time = (datetime.now() - edit_start).total_seconds()
                 
                 if edited_file and os.path.exists(edited_file):
@@ -368,7 +373,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 file_input.send_keys(os.path.abspath(video_file_path))
                 print(f"[Row {row}] File uploaded (using existing input): {video_file_path}")
             
-            await asyncio.to_thread(upload_file)
+            # Chạy trực tiếp trong thread pool để tránh overhead
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(upload_file)
+                await asyncio.wrap_future(future)
             upload_times['file_upload_time'] = (datetime.now() - file_upload_start).total_seconds()
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("⏳ Waiting for upload..."))
             
@@ -425,13 +434,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 )
                 print(f"[Row {row}] Redirected to content page")
             
-            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click)
+            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - chạy trực tiếp
             click_start = datetime.now()
-            await asyncio.to_thread(wait_and_click_post)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(wait_and_click_post)
+                await asyncio.wrap_future(future)
             click_end = datetime.now()
             
             # Tách thời gian: đợi nút Post và redirect
-            # Giả sử redirect mất ~1-2s, phần còn lại là đợi nút Post
             total_wait_time = (click_end - wait_post_start).total_seconds()
             upload_times['wait_post_time'] = total_wait_time  # Tổng thời gian đợi nút Post và redirect
             upload_times['post_click_time'] = 0  # Đã tính trong wait_post_time
