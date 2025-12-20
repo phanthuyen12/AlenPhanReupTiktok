@@ -5,12 +5,15 @@ from ui import Ui_MainWindow   # file UI Qt Designer tạo
 from utils import LoadsFile
 from utils.tiktok_action import ProfileController
 from utils.youtube_downloader import download_youtube_video
+from utils.video_editor import edit_video_to_65s
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 import asyncio
 import qasync
 import os
+import re
+from datetime import datetime
 from token_rotator import TokenRotator
 from watcher import watch_channel
 
@@ -27,6 +30,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.profile_controllers = {}  # {row: ProfileController}
         # 🔹 Lưu file input cho mỗi hàng
         self.file_inputs = {}  # {row: file_input_element}
+        # 🔹 Lưu danh sách video đã upload (chỉ trong session hiện tại)
+        self.uploaded_videos = set()  # {video_id}
 
         # 🔹 Kết nối nút
         self.btnStart.clicked.connect(lambda: asyncio.create_task(self.on_start_clicked()))
@@ -192,44 +197,129 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # Không tự động đóng profile, để người dùng tự quản lý
             pass
 
+    def extract_video_id(self, video_url):
+        """Trích xuất video_id từ YouTube URL"""
+        # Hỗ trợ nhiều format: watch?v=, shorts/, /v/
+        patterns = [
+            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+            r'youtube\.com\/shorts\/([0-9A-Za-z_-]{11})',
+            r'youtu\.be\/([0-9A-Za-z_-]{11})'
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, video_url)
+            if match:
+                return match.group(1)
+        return None
+
     async def handle_new_video(self, row, video_url):
-        """Xử lý khi có video mới: download và upload lên TikTok"""
+        """Xử lý khi có video mới: download → edit (nếu cần) → upload lên TikTok"""
+        # Trích xuất video_id để kiểm tra đã upload chưa
+        video_id = self.extract_video_id(video_url)
+        
+        if video_id and video_id in self.uploaded_videos:
+            print(f"⏭️ [{row}] Video {video_id} đã được upload, bỏ qua")
+            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("⏭️ Video đã upload, bỏ qua"))
+            return
+        
+        start_time = datetime.now()
+        video_file = None
+        final_file = None
+        
         try:
+            # Lấy thông tin profile và channel
+            profile_item = self.tbData.item(row, 1)
+            channel_item = self.tbData.item(row, 2)
+            profile_id = profile_item.text() if profile_item else "Unknown"
+            channel_id = channel_item.text() if channel_item else "Unknown"
+            
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📥 Downloading video..."))
             
             # Download video về thư mục Downloads
+            # Tối ưu: dùng progressive_only=True để nhanh hơn (không cần merge)
             download_path = os.path.join(os.getcwd(), "Downloads")
             video_file = await asyncio.to_thread(
                 download_youtube_video,
                 video_url,
                 download_path=download_path,
                 max_resolution=720,
-                progressive_only=False
+                progressive_only=True  # Nhanh hơn, không cần merge audio/video
             )
             
             if not video_file or not os.path.exists(video_file):
                 self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("❌ Download failed"))
                 return
             
+            final_file = video_file
+            
+            # Kiểm tra radio button: có edit video không?
+            need_edit = self.rdEdit65s.isChecked()
+            
+            if need_edit:
+                self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✂️ Editing video to 65s..."))
+                
+                # Edit video cắt 65s đầu tiên
+                edited_file = await asyncio.to_thread(
+                    edit_video_to_65s,
+                    video_file
+                )
+                
+                if edited_file and os.path.exists(edited_file):
+                    final_file = edited_file
+                    # Xóa file gốc sau khi edit xong để tiết kiệm dung lượng
+                    try:
+                        os.remove(video_file)
+                    except:
+                        pass
+                else:
+                    print(f"[Row {row}] Edit failed, using original file")
+                    # Nếu edit lỗi thì dùng file gốc
+            
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📤 Uploading to TikTok..."))
             
             # Upload video lên TikTok
-            await self.upload_video_to_tiktok(row, video_file)
+            upload_success = await self.upload_video_to_tiktok(row, final_file)
+            
+            # Chỉ đánh dấu đã upload và log nếu upload thành công
+            if upload_success and video_id:
+                # Đánh dấu video đã được upload
+                self.uploaded_videos.add(video_id)
+                
+                # Tính thời gian hoàn thành
+                end_time = datetime.now()
+                elapsed_time = end_time - start_time
+                elapsed_str = f"{elapsed_time.total_seconds():.1f}s"
+                
+                # Log vào txtLog: profile - kênh - videos - thời gian hoàn thành
+                log_message = f"{profile_id} | {channel_id} | {video_url} | {elapsed_str}\n"
+                self.txtLog.appendPlainText(log_message)
             
             # Xóa file sau khi upload xong (tùy chọn)
-            # os.remove(video_file)
+            try:
+                if os.path.exists(final_file):
+                    os.remove(final_file)
+            except:
+                pass
             
         except Exception as e:
             error_msg = f"Error handling video: {str(e)}"
             print(f"[Row {row}] {error_msg}")
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem(f"❌ {error_msg[:50]}"))
+            
+            # Cleanup files nếu có lỗi
+            for f in [video_file, final_file]:
+                if f and os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
 
     async def upload_video_to_tiktok(self, row, video_file_path):
-        """Upload video lên TikTok Studio và click nút Post"""
+        """Upload video lên TikTok Studio và click nút Post
+        Returns: True nếu upload thành công, False nếu lỗi"""
         try:
             if row not in self.profile_controllers or row not in self.file_inputs:
                 print(f"[Row {row}] Profile controller or file input not found")
-                return
+                return False
             
             controller = self.profile_controllers[row]
             driver = controller.driver
@@ -279,11 +369,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             new_file_input = await asyncio.to_thread(get_new_file_input)
             self.file_inputs[row] = new_file_input
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✅ Ready for next video"))
+            return True  # Upload thành công
             
         except Exception as e:
             error_msg = f"Upload error: {str(e)}"
             print(f"[Row {row}] {error_msg}")
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem(f"❌ {error_msg[:50]}"))
+            return False  # Upload thất bại
 
     def on_stop_clicked(self):
         print("Stop clicked")
