@@ -244,13 +244,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             download_path = os.path.join(os.getcwd(), "Downloads")
             
             # Dùng asyncio.to_thread() - overhead tối thiểu, không lag giao diện, nhanh như test
-            video_file = await asyncio.to_thread(
-                download_youtube_video,
-                video_url,
-                download_path,
-                720,  # max_resolution
-                False  # progressive_only=False - giống như dowloadstest.py
-            )
+            # video_file = await asyncio.to_thread(
+            #     download_youtube_video,
+            #     video_url,
+            #     download_path,
+            #     720,  # max_resolution
+            #     False  # progressive_only=False - giống như dowloadstest.py
+            # )
+            video_file = download_youtube_video(
+            url=download_path,
+            download_path=download_path,
+            max_resolution=720,
+            progressive_only=False
+        )
             download_time = (datetime.now() - download_start).total_seconds()
             
             if not video_file or not os.path.exists(video_file):
