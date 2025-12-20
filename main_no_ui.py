@@ -8,8 +8,7 @@ from loader import TxtLoader
 from token_rotator import TokenRotator
 from watcher import watch_channel
 from utils.tiktok_action import ProfileController
-from utils.youtube_downloader import download_youtube_video
-from utils.video_editor import edit_video_to_65s
+from utils.download_client import DownloadAPIClient
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
@@ -23,6 +22,7 @@ MAX_RESOLUTION = 720
 uploaded_videos = set()
 profile_controllers = {}
 file_inputs = {}
+download_client = None  # Sẽ khởi tạo trong main()
 
 def extract_video_id(video_url):
     """Trích xuất video_id từ YouTube URL"""
@@ -132,48 +132,40 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
     start_time = datetime.now()
     download_time = 0
     edit_time = 0
-    video_file = None
     final_file = None
     
     try:
         print(f"[Row {row}] 📥 Downloading video: {video_url}")
-        download_start = datetime.now()
-        download_path = os.path.join(os.getcwd(), "Downloads")
         
-        # GỌI TRỰC TIẾP trong thread để không block - giống như dowloadstest.py
+        # Khởi tạo download client nếu chưa có
+        global download_client
+        if download_client is None:
+            download_client = DownloadAPIClient()
+        
+        # Gọi API để download (và edit nếu cần) - không block
         loop = asyncio.get_event_loop()
-        video_file = await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
-            download_youtube_video,
+            download_client.download_video,
             video_url,
-            download_path,
             MAX_RESOLUTION,
-            False  # progressive_only=False
+            False,  # progressive_only=False
+            EDIT_VIDEO  # edit_65s
         )
-        download_time = (datetime.now() - download_start).total_seconds()
         
-        if not video_file or not os.path.exists(video_file):
-            print(f"[Row {row}] ❌ Download failed")
+        download_time = result.get('download_time', 0)
+        edit_time = result.get('edit_time', 0)
+        
+        if not result.get('success') or not result.get('file_path'):
+            error_msg = result.get('error', 'Unknown error')
+            print(f"[Row {row}] ❌ Download failed: {error_msg}")
             return
         
-        final_file = video_file
+        final_file = result['file_path']
         
-        # Edit nếu cần
-        if EDIT_VIDEO:
-            print(f"[Row {row}] ✂️ Editing video to 65s...")
-            edit_start = datetime.now()
-            loop = asyncio.get_event_loop()
-            edited_file = await loop.run_in_executor(None, edit_video_to_65s, video_file)
-            edit_time = (datetime.now() - edit_start).total_seconds()
-            
-            if edited_file and os.path.exists(edited_file):
-                final_file = edited_file
-                try:
-                    os.remove(video_file)
-                except:
-                    pass
-            else:
-                print(f"[Row {row}] Edit failed, using original file")
+        if not os.path.exists(final_file):
+            print(f"[Row {row}] ❌ File not found after download")
+            return
         
         # Upload
         if row not in file_inputs:
@@ -261,9 +253,12 @@ async def run_profile_watcher(row, profile_id, channel_id, tokens):
         traceback.print_exc()
 
 async def main():
-    """Main function - KHÔNG UI"""
+    """Main function - KHÔNG UI - DÙNG API SERVER"""
     print("="*60)
-    print("🚀 REUP TIKTOK - NO UI VERSION (TEST SPEED)")
+    print("🚀 REUP TIKTOK - NO UI VERSION (API SERVER)")
+    print("="*60)
+    print("⚠️  Đảm bảo API server đang chạy:")
+    print("    uvicorn download_api_server:app --host 0.0.0.0 --port 8000")
     print("="*60)
     
     # Load tokens và channels
