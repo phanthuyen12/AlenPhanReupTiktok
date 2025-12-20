@@ -239,21 +239,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📥 Downloading video..."))
             
-            # Download video về thư mục Downloads - DÙNG TRỰC TIẾP như dowloadstest.py (nhanh hơn)
+            # Download video về thư mục Downloads - GỌI TRỰC TIẾP như dowloadstest.py (nhanh nhất)
             download_start = datetime.now()
             download_path = os.path.join(os.getcwd(), "Downloads")
             
-            # Chạy trực tiếp trong thread riêng (giống như dowloadstest.py) để tránh overhead
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    download_youtube_video,
-                    video_url,
-                    download_path,
-                    720,  # max_resolution
-                    False  # progressive_only=False - giống như dowloadstest.py
-                )
-                video_file = await asyncio.wrap_future(future)
+            # Gọi trực tiếp giống như trong dowloadstest.py - không dùng thread pool để tránh overhead
+            video_file = download_youtube_video(
+                url=video_url,
+                download_path=download_path,
+                max_resolution=720,
+                progressive_only=False  # Giống như dowloadstest.py
+            )
             download_time = (datetime.now() - download_start).total_seconds()
             
             if not video_file or not os.path.exists(video_file):
@@ -269,11 +265,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✂️ Editing video to 65s..."))
                 edit_start = datetime.now()
                 
-                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - chạy trực tiếp
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(edit_video_to_65s, video_file)
-                    edited_file = await asyncio.wrap_future(future)
+                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - gọi trực tiếp
+                edited_file = edit_video_to_65s(video_file)
                 edit_time = (datetime.now() - edit_start).total_seconds()
                 
                 if edited_file and os.path.exists(edited_file):
@@ -363,21 +356,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             # Upload file - DÙNG FILE INPUT ĐÃ TÌM SẴN (không tìm lại để tiết kiệm thời gian)
             file_upload_start = datetime.now()
-            def upload_file():
-                # Dùng file input đã tìm sẵn lúc mở TikTok Studio
-                if row not in self.file_inputs:
-                    raise Exception("File input not found! Please restart profile.")
-                
-                file_input = self.file_inputs[row]
-                # Upload trực tiếp, không cần kiểm tra hay tìm lại
-                file_input.send_keys(os.path.abspath(video_file_path))
-                print(f"[Row {row}] File uploaded (using existing input): {video_file_path}")
+            # Gọi trực tiếp - không dùng thread pool để tránh overhead
+            if row not in self.file_inputs:
+                raise Exception("File input not found! Please restart profile.")
             
-            # Chạy trực tiếp trong thread pool để tránh overhead
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(upload_file)
-                await asyncio.wrap_future(future)
+            file_input = self.file_inputs[row]
+            # Upload trực tiếp, không cần kiểm tra hay tìm lại
+            file_input.send_keys(os.path.abspath(video_file_path))
+            print(f"[Row {row}] File uploaded (using existing input): {video_file_path}")
             upload_times['file_upload_time'] = (datetime.now() - file_upload_start).total_seconds()
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("⏳ Waiting for upload..."))
             
@@ -434,12 +420,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 )
                 print(f"[Row {row}] Redirected to content page")
             
-            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - chạy trực tiếp
+            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - gọi trực tiếp
             click_start = datetime.now()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(wait_and_click_post)
-                await asyncio.wrap_future(future)
+            wait_and_click_post()  # Gọi trực tiếp - không dùng thread pool
             click_end = datetime.now()
             
             # Tách thời gian: đợi nút Post và redirect
@@ -461,8 +444,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 print(f"[Row {row}] Reloaded upload page and found file input")
                 return file_input
             
-            # Reload trang và tìm lại file input mới
-            new_file_input = await asyncio.to_thread(reload_upload_page)
+            # Reload trang và tìm lại file input mới - gọi trực tiếp
+            new_file_input = reload_upload_page()  # Gọi trực tiếp - không dùng thread pool
             upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
             self.file_inputs[row] = new_file_input
             
