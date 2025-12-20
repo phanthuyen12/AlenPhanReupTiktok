@@ -218,9 +218,15 @@ async def run_profile_watcher(row, profile_id, channel_id, tokens):
         print(f"[Row {row}] Starting Genlogin profile: {profile_id}")
         controller = ProfileController(profile_id)
         
+        # Bước 1: Start profile
         controller.start_profile()
+        print(f"[Row {row}] Profile started")
+        
+        # Bước 2: Connect Selenium
+        controller.connect_selenium()
         print(f"[Row {row}] Connected Selenium")
         
+        # Bước 3: Open TikTok Studio
         controller.open_tiktok()
         print(f"[Row {row}] Opened TikTok Studio")
         
