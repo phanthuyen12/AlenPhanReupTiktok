@@ -66,8 +66,24 @@ def download_youtube_video(
             os.makedirs(download_path)
             print(f"Directory created: {download_path}")
 
+        # Normalize URL: chuyển shorts thành watch?v= và đảm bảo format đúng
         url = url.replace("/shorts/", "/watch?v=")
-        video = YouTube(url)
+        # Đảm bảo URL có format đúng: https://www.youtube.com/watch?v=VIDEO_ID
+        if "youtube.com" not in url and "youtu.be" not in url:
+            print(f"❌ Invalid YouTube URL: {url}")
+            return None
+        
+        # Nếu là youtu.be thì chuyển sang youtube.com/watch?v=
+        if "youtu.be/" in url:
+            video_id = url.split("youtu.be/")[-1].split("?")[0]
+            url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        try:
+            video = YouTube(url)
+        except Exception as e:
+            print(f"❌ Error creating YouTube object: {e}")
+            print(f"❌ URL: {url}")
+            return None
         title_clean = sanitize_filename(video.title)
         print(f"\n📥 Video: {video.title}")
 

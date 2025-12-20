@@ -13,11 +13,15 @@ import asyncio
 import qasync
 import os
 import re
+import threading
 from datetime import datetime
 from token_rotator import TokenRotator
 from watcher import watch_channel
 
 class MainWindow(QMainWindow, Ui_MainWindow):
+    # Tạo custom signal để cập nhật GUI từ thread
+    update_status = QtCore.pyqtSignal(int, str)  # row, message
+    update_status_with_link = QtCore.pyqtSignal(int, str, str)  # row, message, video_link
 
     def __init__(self):
         super().__init__()
@@ -38,8 +42,22 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.btnStop.clicked.connect(self.on_stop_clicked)
         self.btnLoadsToken.clicked.connect(self.loads_file_token)
         self.btnLoadsProfile.clicked.connect(self.loads_file_profile)
+        
+        # 🔹 Kết nối signal để cập nhật GUI từ thread
+        self.update_status.connect(self._update_status_slot)
+        self.update_status_with_link.connect(self._update_status_with_link_slot)
 
         self.setup_table()
+    
+    def _update_status_slot(self, row, message):
+        """Slot để cập nhật status từ thread"""
+        self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem(message))
+    
+    def _update_status_with_link_slot(self, row, message, video_link):
+        """Slot để cập nhật status và video link từ thread"""
+        self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem(message))
+        if video_link:
+            self.tbData.setItem(row, 4, QtWidgets.QTableWidgetItem(video_link))
 
     def checkbox_changed(self, state, row):
         """Cập nhật danh sách row checked"""
@@ -237,30 +255,38 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             # File input đã được tìm sẵn lúc mở TikTok Studio, không cần tìm lại
             
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📥 Downloading video..."))
+            self.update_status.emit(row, "📥 Downloading video...")
             
-            # Download video về thư mục Downloads - TỐI ƯU: dùng asyncio.to_thread() để không lag GUI
+            # Download video về thư mục Downloads - GỌI TRỰC TIẾP trong thread riêng (nhanh nhất)
             download_start = datetime.now()
             download_path = os.path.join(os.getcwd(), "Downloads")
             
-            # Dùng asyncio.to_thread() - overhead tối thiểu, không lag giao diện, nhanh như test
-            # video_file = await asyncio.to_thread(
-            #     download_youtube_video,
-            #     video_url,
-            #     download_path,
-            #     720,  # max_resolution
-            #     False  # progressive_only=False - giống như dowloadstest.py
-            # )
-            video_file = download_youtube_video(
-            url=download_path,
-            download_path=download_path,
-            max_resolution=720,
-            progressive_only=False
-        )
+            # Dùng threading để chạy trực tiếp (không dùng asyncio.to_thread - chậm)
+            download_result = [None]  # Dùng list để lưu kết quả từ thread
+            
+            def download_in_thread():
+                """Download trong thread riêng - gọi trực tiếp như dowloadstest.py"""
+                try:
+                    download_result[0] = download_youtube_video(
+                        url=video_url,
+                        download_path=download_path,
+                        max_resolution=720,
+                        progressive_only=False  # Giống như dowloadstest.py
+                    )
+                except Exception as e:
+                    print(f"[Row {row}] Download error: {e}")
+                    download_result[0] = None
+            
+            # Chạy download trong thread riêng
+            download_thread = threading.Thread(target=download_in_thread, daemon=True)
+            download_thread.start()
+            download_thread.join()  # Đợi thread hoàn thành
+            
+            video_file = download_result[0]
             download_time = (datetime.now() - download_start).total_seconds()
             
             if not video_file or not os.path.exists(video_file):
-                self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("❌ Download failed"))
+                self.update_status.emit(row, "❌ Download failed")
                 return
             
             final_file = video_file
@@ -269,11 +295,25 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             need_edit = self.rdEdit65s.isChecked()
             
             if need_edit:
-                self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✂️ Editing video to 65s..."))
+                self.update_status.emit(row, "✂️ Editing video to 65s...")
                 edit_start = datetime.now()
                 
-                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - dùng asyncio.to_thread()
-                edited_file = await asyncio.to_thread(edit_video_to_65s, video_file)
+                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - gọi trực tiếp
+                edit_result = [None]
+                
+                def edit_in_thread():
+                    """Edit trong thread riêng - gọi trực tiếp"""
+                    try:
+                        edit_result[0] = edit_video_to_65s(video_file)
+                    except Exception as e:
+                        print(f"[Row {row}] Edit error: {e}")
+                        edit_result[0] = None
+                
+                edit_thread = threading.Thread(target=edit_in_thread, daemon=True)
+                edit_thread.start()
+                edit_thread.join()
+                
+                edited_file = edit_result[0]
                 edit_time = (datetime.now() - edit_start).total_seconds()
                 
                 if edited_file and os.path.exists(edited_file):
@@ -289,10 +329,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             # Kiểm tra file input đã sẵn sàng (đã tìm lúc mở TikTok Studio)
             if row not in self.file_inputs:
-                self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("❌ File input not ready"))
+                self.update_status.emit(row, "❌ File input not ready")
                 return
             
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📤 Uploading to TikTok..."))
+            self.update_status.emit(row, "📤 Uploading to TikTok...")
             
             # Upload video lên TikTok
             upload_success, upload_times = await self.upload_video_to_tiktok(row, final_file)
@@ -328,7 +368,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except Exception as e:
             error_msg = f"Error handling video: {str(e)}"
             print(f"[Row {row}] {error_msg}")
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem(f"❌ {error_msg[:50]}"))
+            self.update_status.emit(row, f"❌ {error_msg[:50]}")
             
             # Cleanup files nếu có lỗi
             for f in [video_file, final_file]:
@@ -371,7 +411,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             file_input.send_keys(os.path.abspath(video_file_path))
             print(f"[Row {row}] File uploaded (using existing input): {video_file_path}")
             upload_times['file_upload_time'] = (datetime.now() - file_upload_start).total_seconds()
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("⏳ Waiting for upload..."))
+            self.update_status.emit(row, "⏳ Waiting for upload...")
             
             # Đợi nút Post xuất hiện và click - Áp dụng logic từ JS
             wait_post_start = datetime.now()
@@ -426,19 +466,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 )
                 print(f"[Row {row}] Redirected to content page")
             
-            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - gọi trực tiếp
+            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - gọi trực tiếp trong thread
             click_start = datetime.now()
-            await asyncio.to_thread(wait_and_click_post)  # Chạy trong thread để không lag GUI
+            wait_thread = threading.Thread(target=wait_and_click_post, daemon=True)
+            wait_thread.start()
+            wait_thread.join()
             click_end = datetime.now()
             
             # Tách thời gian: đợi nút Post và redirect
             total_wait_time = (click_end - wait_post_start).total_seconds()
             upload_times['wait_post_time'] = total_wait_time  # Tổng thời gian đợi nút Post và redirect
             upload_times['post_click_time'] = 0  # Đã tính trong wait_post_time
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✅ Video posted!"))
+            self.update_status.emit(row, "✅ Video posted!")
             
             # Reload về giao diện TikTok uploads và tìm lại file input
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("🔄 Reloading upload page..."))
+            self.update_status.emit(row, "🔄 Reloading upload page...")
             
             reload_start = datetime.now()
             def reload_upload_page():
@@ -450,8 +492,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 print(f"[Row {row}] Reloaded upload page and found file input")
                 return file_input
             
-            # Reload trang và tìm lại file input mới - dùng asyncio.to_thread()
-            new_file_input = await asyncio.to_thread(reload_upload_page)  # Chạy trong thread để không lag GUI
+            # Reload trang và tìm lại file input mới - gọi trực tiếp trong thread
+            reload_result = [None]
+            def reload_wrapper():
+                reload_result[0] = reload_upload_page()
+            
+            reload_thread = threading.Thread(target=reload_wrapper, daemon=True)
+            reload_thread.start()
+            reload_thread.join()
+            
+            new_file_input = reload_result[0]
             upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
             self.file_inputs[row] = new_file_input
             
@@ -459,7 +509,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             upload_times['total_upload_time'] = (datetime.now() - upload_start_total).total_seconds()
             
             # Tiếp tục theo dõi YouTube (đã chạy trong vòng lặp watch_channel)
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("👀 Watching YouTube..."))
+            self.update_status.emit(row, "👀 Watching YouTube...")
             print(f"[Row {row}] Ready for next video - Continue watching YouTube")
             return True, upload_times  # Upload thành công
             
