@@ -239,16 +239,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("📥 Downloading video..."))
             
-            # Download video về thư mục Downloads - GỌI TRỰC TIẾP như dowloadstest.py (nhanh nhất)
+            # Download video về thư mục Downloads - TỐI ƯU: dùng asyncio.to_thread() để không lag GUI
             download_start = datetime.now()
             download_path = os.path.join(os.getcwd(), "Downloads")
             
-            # Gọi trực tiếp giống như trong dowloadstest.py - không dùng thread pool để tránh overhead
-            video_file = download_youtube_video(
-                url=video_url,
-                download_path=download_path,
-                max_resolution=720,
-                progressive_only=False  # Giống như dowloadstest.py
+            # Dùng asyncio.to_thread() - overhead tối thiểu, không lag giao diện, nhanh như test
+            video_file = await asyncio.to_thread(
+                download_youtube_video,
+                video_url,
+                download_path,
+                720,  # max_resolution
+                False  # progressive_only=False - giống như dowloadstest.py
             )
             download_time = (datetime.now() - download_start).total_seconds()
             
@@ -265,8 +266,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("✂️ Editing video to 65s..."))
                 edit_start = datetime.now()
                 
-                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - gọi trực tiếp
-                edited_file = edit_video_to_65s(video_file)
+                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - dùng asyncio.to_thread()
+                edited_file = await asyncio.to_thread(edit_video_to_65s, video_file)
                 edit_time = (datetime.now() - edit_start).total_seconds()
                 
                 if edited_file and os.path.exists(edited_file):
@@ -298,7 +299,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 # Tính thời gian tổng
                 total_time = (datetime.now() - start_time).total_seconds()
                 
-                # Log chi tiết vào txtLog với thời gian upload chi tiết
+                # Log chi tiết vào txtLog với thời gian upload chi tiết (bỏ Reload time)
                 log_message = (
                     f"{profile_id} | {channel_id} | {video_url} | "
                     f"Download: {download_time:.1f}s | "
@@ -306,8 +307,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     f"Upload: {upload_times['total_upload_time']:.1f}s "
                     f"(File: {upload_times['file_upload_time']:.1f}s, "
                     f"Processing: {upload_times['wait_post_time']:.1f}s, "
-                    f"ClickPost: {upload_times['post_click_time']:.1f}s, "
-                    f"Reload: {upload_times['reload_time']:.1f}s) | "
+                    f"ClickPost: {upload_times['post_click_time']:.1f}s) | "
                     f"Total: {total_time:.1f}s\n"
                 )
                 self.txtLog.appendPlainText(log_message)
@@ -422,7 +422,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - gọi trực tiếp
             click_start = datetime.now()
-            wait_and_click_post()  # Gọi trực tiếp - không dùng thread pool
+            await asyncio.to_thread(wait_and_click_post)  # Chạy trong thread để không lag GUI
             click_end = datetime.now()
             
             # Tách thời gian: đợi nút Post và redirect
@@ -444,8 +444,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 print(f"[Row {row}] Reloaded upload page and found file input")
                 return file_input
             
-            # Reload trang và tìm lại file input mới - gọi trực tiếp
-            new_file_input = reload_upload_page()  # Gọi trực tiếp - không dùng thread pool
+            # Reload trang và tìm lại file input mới - dùng asyncio.to_thread()
+            new_file_input = await asyncio.to_thread(reload_upload_page)  # Chạy trong thread để không lag GUI
             upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
             self.file_inputs[row] = new_file_input
             
