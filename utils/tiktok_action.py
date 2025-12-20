@@ -8,7 +8,7 @@ from selenium.webdriver.chrome.options import Options
 from utils import GEN  # hoặc từ package genlogin
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-CHROMEDRIVER_PATH = os.path.join("../bin", "chromedriver.exe")
+CHROMEDRIVER_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bin", "chromedriver.exe")
 
 class ProfileController:
     def __init__(self, profile_id: str):

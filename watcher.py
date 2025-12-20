@@ -2,10 +2,11 @@ import asyncio
 from googleapiclient.errors import HttpError
 from youtube_client import get_latest_video
 
-async def watch_channel(channel_id: str, rotator, interval=1, log_callback=None):
+async def watch_channel(channel_id: str, rotator, interval=1, log_callback=None, video_callback=None):
     """
     Theo dõi video mới của channel.
     log_callback: function nhận string để log vào GUI hoặc file
+    video_callback: function nhận video_url khi có video mới
     """
     baseline_video_id = None
 
@@ -61,6 +62,9 @@ async def watch_channel(channel_id: str, rotator, interval=1, log_callback=None)
                     video_url = f"https://www.youtube.com/watch?v={video_id}"
                     log(f"🔥 [{channel_id}] NEW VIDEO: {result.get('title', '')} | token {token[:8]}", video_url)
                     print(f"🔥 [{channel_id}] NEW VIDEO detected: {video_url}")
+                    # Gọi callback để download và upload
+                    if video_callback:
+                        await video_callback(video_url)
                 else:
                     log(f"⏱ [{channel_id}] no new video, latest = {baseline_video_id}")
                     print(f"⏱ [{channel_id}] Checked: no new video")
