@@ -27,22 +27,22 @@ def test_download():
         print("-" * 60)
         
         # Test với progressive_only=True (nhanh hơn)
-        print("\n🔹 Test 1: Progressive stream (max 720p)")
-        filepath = download_youtube_video(
-            url=url,
-            download_path=download_path,
-            max_resolution=720,
-            progressive_only=True
-        )
+        # print("\n🔹 Test 1: Progressive stream (max 720p)")
+        # filepath = download_youtube_video(
+        #     url=url,
+        #     download_path=download_path,
+        #     max_resolution=720,
+        #     progressive_only=True
+        # )
         
-        if filepath and os.path.exists(filepath):
-            size_mb = os.path.getsize(filepath) / (1024 * 1024)
-            print(f"✅ SUCCESS! File saved: {filepath}")
-            print(f"📊 File size: {size_mb:.2f} MB")
-        else:
-            print("❌ FAILED! File not found")
+        # if filepath and os.path.exists(filepath):
+        #     size_mb = os.path.getsize(filepath) / (1024 * 1024)
+        #     print(f"✅ SUCCESS! File saved: {filepath}")
+        #     print(f"📊 File size: {size_mb:.2f} MB")
+        # else:
+        #     print("❌ FAILED! File not found")
         
-        print("\n" + "=" * 60)
+        # print("\n" + "=" * 60)
         
         # Test với progressive_only=False (có thể merge audio/video)
         print("\n🔹 Test 2: Adaptive streams (max 720p, allow merge)")

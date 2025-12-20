@@ -4,3 +4,5 @@ nenv/
 *.pyc
 __pycache__/
 channels.txt
+Downloads
+bin

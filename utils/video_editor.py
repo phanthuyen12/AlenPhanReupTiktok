@@ -22,7 +22,7 @@ def get_ffmpeg_path():
 
 def edit_video_to_65s(input_file, output_file=None, duration=65):
     """
-    Cắt video thành 65s đầu tiên
+    Cắt video thành 65s đầu tiên (hoặc toàn bộ nếu video ngắn hơn)
     Args:
         input_file: Đường dẫn file video input
         output_file: Đường dẫn file output (nếu None thì ghi đè)
@@ -35,6 +35,34 @@ def edit_video_to_65s(input_file, output_file=None, duration=65):
             print(f"❌ File không tồn tại: {input_file}")
             return None
         
+        # Kiểm tra độ dài video thực tế (tùy chọn - để tối ưu cho video ngắn)
+        # Nếu video ngắn hơn duration, chỉ cần copy file (nhanh hơn)
+        try:
+            import subprocess as sp
+            ffmpeg_path = get_ffmpeg_path()
+            probe_cmd = [
+                ffmpeg_path, "-i", input_file,
+                "-show_entries", "format=duration",
+                "-v", "quiet", "-of", "csv=p=0"
+            ]
+            result = sp.run(probe_cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                video_duration = float(result.stdout.strip())
+                # Nếu video ngắn hơn hoặc bằng duration, chỉ cần copy file
+                if video_duration <= duration:
+                    print(f"📹 Video chỉ có {video_duration:.1f}s, không cần cắt")
+                    # Copy file trực tiếp (nhanh nhất)
+                    import shutil
+                    if output_file is None:
+                        base_name = os.path.splitext(input_file)[0]
+                        ext = os.path.splitext(input_file)[1]
+                        output_file = f"{base_name}_65s{ext}"
+                    shutil.copy2(input_file, output_file)
+                    print(f"✅ Copy complete (no edit needed) | Size: {os.path.getsize(output_file) / (1024*1024):.2f} MB")
+                    return output_file
+        except:
+            pass  # Nếu không probe được thì cắt bình thường
+        
         # Nếu không có output_file, tạo tên mới
         if output_file is None:
             base_name = os.path.splitext(input_file)[0]
@@ -43,12 +71,12 @@ def edit_video_to_65s(input_file, output_file=None, duration=65):
         
         ffmpeg_path = get_ffmpeg_path()
         
-        # Command để cắt video 65s đầu tiên
+        # Command để cắt video 65s đầu tiên (hoặc toàn bộ nếu ngắn hơn)
         command = [
             ffmpeg_path,
             "-y",  # Overwrite output file
             "-i", input_file,
-            "-t", str(duration),  # Cắt 65s đầu tiên
+            "-t", str(duration),  # Cắt 65s đầu tiên (hoặc toàn bộ nếu ngắn hơn)
             "-c", "copy",  # Copy codec để nhanh (không encode lại)
             "-avoid_negative_ts", "make_zero",  # Tránh lỗi timestamp
             output_file
