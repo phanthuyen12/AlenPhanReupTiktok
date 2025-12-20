@@ -6,6 +6,7 @@ from utils import LoadsFile
 from utils.tiktok_action import ProfileController
 from utils.youtube_downloader import download_youtube_video
 from utils.video_editor import edit_video_to_65s
+from utils.download_client import DownloadAPIClient
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
@@ -36,6 +37,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.file_inputs = {}  # {row: file_input_element}
         # 🔹 Lưu danh sách video đã upload (chỉ trong session hiện tại)
         self.uploaded_videos = set()  # {video_id}
+        # 🔹 Download API Client (tùy chọn - nếu dùng API server)
+        self.download_client = None  # Sẽ khởi tạo nếu cần
 
         # 🔹 Kết nối nút
         self.btnStart.clicked.connect(lambda: asyncio.create_task(self.on_start_clicked()))
@@ -257,54 +260,40 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             self.update_status.emit(row, "📥 Downloading video...")
             
-            # Download video về thư mục Downloads - GỌI TRỰC TIẾP (nhanh nhất, không block)
+            # Download video - DÙNG API SERVER (nhanh hơn, không lag GUI)
             download_start = datetime.now()
-            download_path = os.path.join(os.getcwd(), "Downloads")
             
-            # Dùng asyncio.get_event_loop().run_in_executor() với None (default executor) - nhanh và không block
-            loop = asyncio.get_event_loop()
-            video_file = await loop.run_in_executor(
-                None,  # Dùng default thread pool executor
-                download_youtube_video,
-                video_url,
-                download_path,
-                720,  # max_resolution
-                False  # progressive_only=False - giống như dowloadstest.py
-            )
-            download_time = (datetime.now() - download_start).total_seconds()
-            
-            if not video_file or not os.path.exists(video_file):
-                self.update_status.emit(row, "❌ Download failed")
-                return
-            
-            final_file = video_file
+            # Khởi tạo download client nếu chưa có
+            if self.download_client is None:
+                self.download_client = DownloadAPIClient()
             
             # Kiểm tra radio button: có edit video không?
             need_edit = self.rdEdit65s.isChecked()
             
-            if need_edit:
-                self.update_status.emit(row, "✂️ Editing video to 65s...")
-                edit_start = datetime.now()
-                
-                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - không block
-                loop = asyncio.get_event_loop()
-                edited_file = await loop.run_in_executor(
-                    None,
-                    edit_video_to_65s,
-                    video_file
-                )
-                edit_time = (datetime.now() - edit_start).total_seconds()
-                
-                if edited_file and os.path.exists(edited_file):
-                    final_file = edited_file
-                    # Xóa file gốc sau khi edit xong để tiết kiệm dung lượng
-                    try:
-                        os.remove(video_file)
-                    except:
-                        pass
-                else:
-                    print(f"[Row {row}] Edit failed, using original file")
-                    # Nếu edit lỗi thì dùng file gốc
+            # Gọi API để download (và edit nếu cần) - không block GUI
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                self.download_client.download_video,
+                video_url,
+                720,  # max_resolution
+                False,  # progressive_only=False
+                need_edit  # edit_65s
+            )
+            
+            download_time = result.get('download_time', 0)
+            edit_time = result.get('edit_time', 0)
+            
+            if not result.get('success') or not result.get('file_path'):
+                error_msg = result.get('error', 'Unknown error')
+                self.update_status.emit(row, f"❌ Download failed: {error_msg[:30]}")
+                return
+            
+            final_file = result['file_path']
+            
+            if not os.path.exists(final_file):
+                self.update_status.emit(row, "❌ File not found after download")
+                return
             
             # Kiểm tra file input đã sẵn sàng (đã tìm lúc mở TikTok Studio)
             if row not in self.file_inputs:
