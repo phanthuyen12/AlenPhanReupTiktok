@@ -1,0 +1,6 @@
+# Ignore virtualenv
+venv/
+nenv/
+*.pyc
+__pycache__/
+channels.txt
