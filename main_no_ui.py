@@ -8,7 +8,7 @@ from loader import TxtLoader
 from token_rotator import TokenRotator
 from watcher import watch_channel
 from utils.tiktok_action import ProfileController
-from utils.download_client import DownloadAPIClient
+import httpx
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
@@ -22,7 +22,8 @@ MAX_RESOLUTION = 720
 uploaded_videos = set()
 profile_controllers = {}
 file_inputs = {}
-download_client = None  # Sẽ khởi tạo trong main()
+API_BASE_URL = "http://localhost:8000"  # API server URL
+http_client = None  # Reuse httpx client để tăng tốc độ
 
 def extract_video_id(video_url):
     """Trích xuất video_id từ YouTube URL"""
@@ -143,21 +144,19 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
     try:
         print(f"[Row {row}] 📥 Downloading video: {video_url}")
         
-        # Khởi tạo download client nếu chưa có
-        global download_client
-        if download_client is None:
-            download_client = DownloadAPIClient()
-        
-        # Gọi API để download (và edit nếu cần) - không block
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            download_client.download_video,
-            video_url,
-            MAX_RESOLUTION,
-            False,  # progressive_only=False
-            EDIT_VIDEO  # edit_65s
-        )
+        # Gọi API TRỰC TIẾP bằng httpx async (nhanh nhất, giống Postman, không có executor overhead)
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{API_BASE_URL}/download",
+                json={
+                    "url": video_url,
+                    "max_resolution": MAX_RESOLUTION,
+                    "progressive_only": False,
+                    "edit_65s": EDIT_VIDEO
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
         
         download_time = result.get('download_time', 0)
         edit_time = result.get('edit_time', 0)
