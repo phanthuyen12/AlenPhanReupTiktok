@@ -87,41 +87,29 @@ def download_youtube_video(
         title_clean = sanitize_filename(video.title)
         print(f"\n📥 Video: {video.title}")
 
-        # Tối ưu: Ưu tiên progressive stream vì nhanh hơn (không cần merge)
-        if progressive_only:
-            # Tìm stream progressive có resolution <= max_resolution, ưu tiên cao nhất
-            streams = video.streams.filter(progressive=True, file_extension='mp4')
-            if not streams:
-                print("⚠️ No progressive stream, trying adaptive...")
-                progressive_only = False
+        # TỐI ƯU TỐC ĐỘ: Luôn ưu tiên progressive stream (nhanh nhất, không cần merge)
+        # Tìm progressive stream trước (nhanh hơn adaptive rất nhiều)
+        progressive_streams = video.streams.filter(progressive=True, file_extension='mp4')
+        if progressive_streams:
+            # Tìm stream có resolution <= max_resolution, ưu tiên cao nhất
+            candidates = [s for s in progressive_streams 
+                         if s.resolution and int(s.resolution.replace("p", "")) <= max_resolution]
+            if candidates:
+                # Chọn resolution cao nhất trong giới hạn
+                stream = max(candidates, key=lambda x: int(x.resolution.replace("p", "")))
+                progressive_only = True
+                print(f"✅ Found progressive stream: {stream.resolution}")
             else:
-                # Sắp xếp và chọn stream phù hợp nhất
-                sorted_streams = sorted(
-                    [s for s in streams if s.resolution and int(s.resolution.replace("p", "")) <= max_resolution],
-                    key=lambda x: int(x.resolution.replace("p", "")) if x.resolution else 0,
-                    reverse=True
-                )
-                stream = sorted_streams[0] if sorted_streams else streams.order_by('resolution').desc().first()
-        
-        if not progressive_only:
-            # Thử tìm progressive stream trước (nhanh hơn)
-            progressive_streams = video.streams.filter(progressive=True, file_extension='mp4')
-            if progressive_streams:
-                sorted_prog = sorted(
-                    [s for s in progressive_streams if s.resolution and int(s.resolution.replace("p", "")) <= max_resolution],
-                    key=lambda x: int(x.resolution.replace("p", "")) if x.resolution else 0,
-                    reverse=True
-                )
-                if sorted_prog:
-                    stream = sorted_prog[0]
-                    progressive_only = True
-                    print(f"✅ Found progressive stream: {stream.resolution}")
-                else:
-                    stream = progressive_streams.order_by('resolution').desc().first()
-                    progressive_only = True
-            else:
-                # Không có progressive, dùng adaptive
-                stream = video.streams.filter(file_extension='mp4').order_by('resolution').desc().first()
+                # Nếu không có stream <= max_resolution, lấy stream thấp nhất
+                stream = min(progressive_streams, 
+                           key=lambda x: int(x.resolution.replace("p", "")) if x.resolution else 9999)
+                progressive_only = True
+                print(f"✅ Using progressive stream: {stream.resolution}")
+        else:
+            # Không có progressive, mới dùng adaptive (chậm hơn)
+            print("⚠️ No progressive stream, using adaptive (slower)...")
+            progressive_only = False
+            stream = video.streams.filter(file_extension='mp4').order_by('resolution').desc().first()
 
         if not stream:
             print("❌ No suitable stream found!")

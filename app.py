@@ -257,32 +257,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
             self.update_status.emit(row, "📥 Downloading video...")
             
-            # Download video về thư mục Downloads - GỌI TRỰC TIẾP trong thread riêng (nhanh nhất)
+            # Download video về thư mục Downloads - GỌI TRỰC TIẾP (nhanh nhất, không block)
             download_start = datetime.now()
             download_path = os.path.join(os.getcwd(), "Downloads")
             
-            # Dùng threading để chạy trực tiếp (không dùng asyncio.to_thread - chậm)
-            download_result = [None]  # Dùng list để lưu kết quả từ thread
-            
-            def download_in_thread():
-                """Download trong thread riêng - gọi trực tiếp như dowloadstest.py"""
-                try:
-                    download_result[0] = download_youtube_video(
-                        url=video_url,
-                        download_path=download_path,
-                        max_resolution=720,
-                        progressive_only=False  # Giống như dowloadstest.py
-                    )
-                except Exception as e:
-                    print(f"[Row {row}] Download error: {e}")
-                    download_result[0] = None
-            
-            # Chạy download trong thread riêng
-            download_thread = threading.Thread(target=download_in_thread, daemon=True)
-            download_thread.start()
-            download_thread.join()  # Đợi thread hoàn thành
-            
-            video_file = download_result[0]
+            # Dùng asyncio.get_event_loop().run_in_executor() với None (default executor) - nhanh và không block
+            loop = asyncio.get_event_loop()
+            video_file = await loop.run_in_executor(
+                None,  # Dùng default thread pool executor
+                download_youtube_video,
+                video_url,
+                download_path,
+                720,  # max_resolution
+                False  # progressive_only=False - giống như dowloadstest.py
+            )
             download_time = (datetime.now() - download_start).total_seconds()
             
             if not video_file or not os.path.exists(video_file):
@@ -298,22 +286,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.update_status.emit(row, "✂️ Editing video to 65s...")
                 edit_start = datetime.now()
                 
-                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - gọi trực tiếp
-                edit_result = [None]
-                
-                def edit_in_thread():
-                    """Edit trong thread riêng - gọi trực tiếp"""
-                    try:
-                        edit_result[0] = edit_video_to_65s(video_file)
-                    except Exception as e:
-                        print(f"[Row {row}] Edit error: {e}")
-                        edit_result[0] = None
-                
-                edit_thread = threading.Thread(target=edit_in_thread, daemon=True)
-                edit_thread.start()
-                edit_thread.join()
-                
-                edited_file = edit_result[0]
+                # Edit video cắt 65s đầu tiên (dùng copy codec để nhanh nhất) - không block
+                loop = asyncio.get_event_loop()
+                edited_file = await loop.run_in_executor(
+                    None,
+                    edit_video_to_65s,
+                    video_file
+                )
                 edit_time = (datetime.now() - edit_start).total_seconds()
                 
                 if edited_file and os.path.exists(edited_file):
@@ -466,11 +445,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 )
                 print(f"[Row {row}] Redirected to content page")
             
-            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - gọi trực tiếp trong thread
+            # Tính thời gian đợi nút Post (từ lúc upload xong đến lúc click) - không block
             click_start = datetime.now()
-            wait_thread = threading.Thread(target=wait_and_click_post, daemon=True)
-            wait_thread.start()
-            wait_thread.join()
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, wait_and_click_post)
             click_end = datetime.now()
             
             # Tách thời gian: đợi nút Post và redirect
@@ -492,16 +470,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 print(f"[Row {row}] Reloaded upload page and found file input")
                 return file_input
             
-            # Reload trang và tìm lại file input mới - gọi trực tiếp trong thread
-            reload_result = [None]
-            def reload_wrapper():
-                reload_result[0] = reload_upload_page()
-            
-            reload_thread = threading.Thread(target=reload_wrapper, daemon=True)
-            reload_thread.start()
-            reload_thread.join()
-            
-            new_file_input = reload_result[0]
+            # Reload trang và tìm lại file input mới - không block
+            loop = asyncio.get_event_loop()
+            new_file_input = await loop.run_in_executor(None, reload_upload_page)
             upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
             self.file_inputs[row] = new_file_input
             
