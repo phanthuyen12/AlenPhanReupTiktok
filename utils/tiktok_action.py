@@ -22,11 +22,16 @@ class ProfileController:
         result = self.gen_login.start_profile(self.profile_id)
         print("Profile data:", result)
 
+        # Kiểm tra result không None trước khi gọi .get()
+        if result is None:
+            raise RuntimeError(f"❌ Không thể mở profile {self.profile_id}: API trả về None")
+        
         if result.get("success") and "data" in result and "wsEndpoint" in result["data"]:
             self.ws_url = result["data"]["wsEndpoint"]
             print(f"[Profile {self.profile_id}] wsEndpoint: {self.ws_url}")
         else:
-            raise RuntimeError(f"❌ Không thể mở profile {self.profile_id}")
+            error_msg = result.get("error", "Unknown error") if isinstance(result, dict) else "Invalid response format"
+            raise RuntimeError(f"❌ Không thể mở profile {self.profile_id}: {error_msg}")
 
     def connect_selenium(self):
         """Kết nối Selenium tới Chrome profile đang chạy"""
