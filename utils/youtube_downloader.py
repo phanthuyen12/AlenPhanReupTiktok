@@ -79,9 +79,9 @@ def download_youtube_video(
             url = f"https://www.youtube.com/watch?v={video_id}"
         
         try:
-            # Đơn giản nhất và nhanh nhất: Không chỉ định client, để pytubefix tự chọn
-            # Việc thử nhiều client song song tốn thời gian hơn, nên để pytubefix tự xử lý
-            video = YouTube(url, use_oauth=False)
+            # Chỉ định WEB client ngay từ đầu để tránh phải switch từ ANDROID_VR sang TV (tiết kiệm ~6s)
+            # WEB client thường work tốt và nhanh hơn TV, tránh delay do switch client
+            video = YouTube(url, client='WEB', use_oauth=False)
         except Exception as e:
             print(f"❌ Error creating YouTube object: {e}")
             print(f"❌ URL: {url}")

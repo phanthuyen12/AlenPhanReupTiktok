@@ -183,7 +183,9 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
         
         if upload_success and video_id and upload_times:
             uploaded_videos.add(video_id)
-            total_time = (datetime.now() - start_time).total_seconds()
+            # Tính total_time = download + edit + upload (KHÔNG tính reload_time)
+            # upload_times['total_upload_time'] đã không bao gồm reload_time
+            total_time = download_time + edit_time + upload_times['total_upload_time']
             
             # Log ra console
             print(f"\n{'='*60}")
@@ -194,7 +196,7 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
             print(f"Upload: {upload_times['total_upload_time']:.1f}s "
                   f"(File: {upload_times['file_upload_time']:.1f}s, "
                   f"Processing: {upload_times['wait_post_time']:.1f}s)")
-            print(f"Total: {total_time:.1f}s")
+            print(f"Total: {total_time:.1f}s (Download + Edit + Upload, không tính reload)")
             print(f"{'='*60}\n")
         
         # Xóa file
