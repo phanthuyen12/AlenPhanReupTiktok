@@ -308,7 +308,6 @@ async def main():
         await asyncio.gather(*tasks)
     finally:
         # Đóng http client khi kết thúc
-        global http_client
         if http_client is not None:
             await http_client.aclose()
             print("\n✅ HTTP client closed")
