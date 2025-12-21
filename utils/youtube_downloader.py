@@ -5,7 +5,6 @@ import time
 import subprocess
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def sanitize_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "", name)
@@ -50,16 +49,6 @@ def download_stream_async(stream, output_path, filename, result_dict, key):
         result_dict[key] = None
         print(f"❌ Error downloading {key}: {e}")
 
-def try_client(url, client_name):
-    """Thử tạo YouTube object với client cụ thể"""
-    try:
-        video = YouTube(url, client=client_name, use_oauth=False)
-        # Test xem có streams không (đảm bảo client work)
-        _ = video.streams.filter(file_extension='mp4').first()
-        return video, client_name
-    except Exception as e:
-        return None, client_name
-
 def download_youtube_video(
     url,
     download_path="Downloads",
@@ -90,47 +79,9 @@ def download_youtube_video(
             url = f"https://www.youtube.com/watch?v={video_id}"
         
         try:
-            # TỐI ƯU: Thử nhiều client cùng lúc, dùng client nào thành công đầu tiên (nhanh nhất)
-            # Chạy song song để tìm client nhanh nhất, không phải chờ từng client một
-            clients_to_try = ['WEB', 'ANDROID', 'IOS', 'TV']  # Thứ tự ưu tiên: WEB nhanh nhất
-            
-            video = None
-            used_client = None
-            
-            # Thử nhiều client song song với ThreadPoolExecutor - dùng client nào thành công đầu tiên
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                # Submit tất cả clients cùng lúc
-                future_to_client = {
-                    executor.submit(try_client, url, client): client 
-                    for client in clients_to_try
-                }
-                
-                # Dùng client nào thành công đầu tiên (race condition - client nào nhanh nhất)
-                for future in as_completed(future_to_client):
-                    if video is not None:
-                        # Đã tìm được client, cancel các task còn lại để tiết kiệm tài nguyên
-                        break
-                    
-                    try:
-                        result_video, result_client = future.result()
-                        if result_video is not None:
-                            video = result_video
-                            used_client = result_client
-                            # Cancel các task còn lại
-                            for f in future_to_client:
-                                if f != future and not f.done():
-                                    f.cancel()
-                            break
-                    except Exception:
-                        continue
-            
-            if video is None:
-                # Fallback: thử không chỉ định client (để pytubefix tự chọn)
-                video = YouTube(url, use_oauth=False)
-                used_client = "DEFAULT"
-            
-            if used_client:
-                print(f"⚡ Using client: {used_client}")
+            # Đơn giản nhất và nhanh nhất: Không chỉ định client, để pytubefix tự chọn
+            # Việc thử nhiều client song song tốn thời gian hơn, nên để pytubefix tự xử lý
+            video = YouTube(url, use_oauth=False)
         except Exception as e:
             print(f"❌ Error creating YouTube object: {e}")
             print(f"❌ URL: {url}")
