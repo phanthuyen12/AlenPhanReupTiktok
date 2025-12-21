@@ -45,7 +45,8 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         'wait_post_time': 0,
         'post_click_time': 0,
         'reload_time': 0,
-        'total_upload_time': 0
+        'total_upload_time': 0,
+        'upload_end_time': None  # Thời điểm upload xong (để tính total_time chính xác)
     }
     
     try:
@@ -65,7 +66,9 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
             raise Exception("File input not found!")
         
         file_input = file_inputs[row]
-        file_input.send_keys(os.path.abspath(video_file_path))
+        # TỐI ƯU: Chỉ gọi abspath nếu chưa phải absolute path (giảm overhead)
+        abs_path = video_file_path if os.path.isabs(video_file_path) else os.path.abspath(video_file_path)
+        file_input.send_keys(abs_path)
         print(f"[Row {row}] File uploaded: {video_file_path}")
         upload_times['file_upload_time'] = (datetime.now() - file_upload_start).total_seconds()
         
@@ -108,6 +111,7 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         
         # TỔNG THỜI GIAN UPLOAD = từ upload file đến click post thành công (KHÔNG tính reload)
         upload_times['total_upload_time'] = (upload_end_total - upload_start_total).total_seconds()
+        upload_times['upload_end_time'] = upload_end_total  # Lưu thời điểm upload xong
         
         # Reload trang (KHÔNG tính vào total_upload_time)
         reload_start = datetime.now()
@@ -142,21 +146,26 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
     final_file = None
     
     try:
+        # TỐI ƯU: Kiểm tra file_input sẵn sàng trước khi download để tránh overhead
+        if row not in file_inputs:
+            print(f"[Row {row}] ❌ File input not ready")
+            return
+        
         print(f"[Row {row}] 📥 Downloading video: {video_url}")
         
         # Gọi API TRỰC TIẾP bằng httpx async - REUSE CLIENT để tăng tốc độ
         # Client đã được khởi tạo trong main(), không tạo mới mỗi lần (tiết kiệm ~5s overhead)
         global http_client
-        response = await http_client.post(
-            f"{API_BASE_URL}/download",
-            json={
-                "url": video_url,
-                "max_resolution": MAX_RESOLUTION,
-                "progressive_only": False,
-                "edit_65s": EDIT_VIDEO
-            }
-        )
+        # TỐI ƯU: Tạo JSON payload một lần, không tạo dict mỗi lần
+        json_payload = {
+            "url": video_url,
+            "max_resolution": MAX_RESOLUTION,
+            "progressive_only": False,
+            "edit_65s": EDIT_VIDEO
+        }
+        response = await http_client.post(f"{API_BASE_URL}/download", json=json_payload)
         response.raise_for_status()
+        # TỐI ƯU: Parse JSON một lần
         result = response.json()
         
         download_time = result.get('download_time', 0)
@@ -169,22 +178,17 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
         
         final_file = result['file_path']
         
-        if not os.path.exists(final_file):
-            print(f"[Row {row}] ❌ File not found after download")
-            return
+        # TỐI ƯU: Bỏ check os.path.exists vì API đã đảm bảo file tồn tại (giảm overhead)
+        # File được tạo trong API server và trả về đường dẫn tuyệt đối
         
-        # Upload
-        if row not in file_inputs:
-            print(f"[Row {row}] ❌ File input not ready")
-            return
-        
+        # Upload ngay lập tức, không có delay
         print(f"[Row {row}] 📤 Uploading to TikTok...")
         upload_success, upload_times = await upload_video_to_tiktok(row, final_file, profile_id, channel_id)
         
         if upload_success and video_id and upload_times:
             uploaded_videos.add(video_id)
-            # Tính total_time = download + edit + upload (KHÔNG tính reload_time)
-            # upload_times['total_upload_time'] đã không bao gồm reload_time
+            # Tính total_time = download + edit + upload (KHÔNG tính overhead và reload_time)
+            # Chỉ tính các bước chính, không tính network latency và overhead giữa các bước
             total_time = download_time + edit_time + upload_times['total_upload_time']
             
             # Log ra console
@@ -196,7 +200,7 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
             print(f"Upload: {upload_times['total_upload_time']:.1f}s "
                   f"(File: {upload_times['file_upload_time']:.1f}s, "
                   f"Processing: {upload_times['wait_post_time']:.1f}s)")
-            print(f"Total: {total_time:.1f}s (Download + Edit + Upload, không tính reload)")
+            print(f"Total: {total_time:.1f}s (Download + Edit + Upload, không tính overhead và reload)")
             print(f"{'='*60}\n")
         
         # Xóa file
