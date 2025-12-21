@@ -79,7 +79,9 @@ def download_youtube_video(
             url = f"https://www.youtube.com/watch?v={video_id}"
         
         try:
-            video = YouTube(url)
+            # Chỉ định client 'TV' ngay từ đầu để tránh phải switch client (tiết kiệm thời gian)
+            # TV client là fallback đầu tiên và thường ổn định nhất, tránh phải retry với các clients khác
+            video = YouTube(url, client='TV')
         except Exception as e:
             print(f"❌ Error creating YouTube object: {e}")
             print(f"❌ URL: {url}")
