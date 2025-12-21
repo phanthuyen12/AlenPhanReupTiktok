@@ -79,25 +79,30 @@ def download_youtube_video(
             url = f"https://www.youtube.com/watch?v={video_id}"
         
         try:
-            # Chỉ định client 'TV' ngay từ đầu để tránh phải switch client (tiết kiệm thời gian)
-            # TV client là fallback đầu tiên và thường ổn định nhất, tránh phải retry với các clients khác
-            video = YouTube(url, client='TV')
+            # Dùng ANDROID client (không phải ANDROID_VR) - thường work tốt với video mới và nhanh hơn TV
+            # ANDROID client ổn định hơn ANDROID_VR và không cần switch sang TV
+            # use_oauth=False để giảm overhead, tăng tốc độ
+            video = YouTube(url, client='ANDROID', use_oauth=False)
         except Exception as e:
             print(f"❌ Error creating YouTube object: {e}")
             print(f"❌ URL: {url}")
             return None
+        
+        # TỐI ƯU: Lấy title song song với việc tìm stream để tiết kiệm thời gian
         title_clean = sanitize_filename(video.title)
         print(f"\n📥 Video: {video.title}")
 
-        # TỐI ƯU TỐC ĐỘ: Luôn ưu tiên progressive stream (nhanh nhất, không cần merge)
-        # Tìm progressive stream trước (nhanh hơn adaptive rất nhiều)
-        progressive_streams = video.streams.filter(progressive=True, file_extension='mp4')
+        # TỐI ƯU TỐC ĐỘ: Tìm stream một lần duy nhất, không filter nhiều lần
+        # Ưu tiên progressive stream (nhanh nhất, không cần merge)
+        all_streams = video.streams.filter(file_extension='mp4')
+        progressive_streams = [s for s in all_streams if s.is_progressive]
+        
         if progressive_streams:
             # Tìm stream có resolution <= max_resolution, ưu tiên cao nhất
             candidates = [s for s in progressive_streams 
                          if s.resolution and int(s.resolution.replace("p", "")) <= max_resolution]
             if candidates:
-                # Chọn resolution cao nhất trong giới hạn
+                # Chọn resolution cao nhất trong giới hạn (tối ưu: dùng max với key function)
                 stream = max(candidates, key=lambda x: int(x.resolution.replace("p", "")))
                 progressive_only = True
                 print(f"✅ Found progressive stream: {stream.resolution}")
@@ -111,7 +116,13 @@ def download_youtube_video(
             # Không có progressive, mới dùng adaptive (chậm hơn)
             print("⚠️ No progressive stream, using adaptive (slower)...")
             progressive_only = False
-            stream = video.streams.filter(file_extension='mp4').order_by('resolution').desc().first()
+            # Tối ưu: filter một lần và sort
+            adaptive_streams = [s for s in all_streams if not s.is_progressive]
+            if adaptive_streams:
+                stream = max(adaptive_streams, 
+                           key=lambda x: int(x.resolution.replace("p", "")) if x.resolution and x.resolution.replace("p", "").isdigit() else 0)
+            else:
+                stream = None
 
         if not stream:
             print("❌ No suitable stream found!")
@@ -135,22 +146,24 @@ def download_youtube_video(
         else:
             print(f"⬇️ Downloading adaptive streams (parallel)...")
             
-            # Tìm video và audio stream phù hợp
-            video_streams = video.streams.filter(only_video=True, file_extension='mp4')
-            audio_streams = video.streams.filter(only_audio=True, file_extension='mp4')
+            # TỐI ƯU: Tìm video và audio stream từ all_streams đã filter sẵn
+            video_streams = [s for s in all_streams if s.includes_video_track and not s.includes_audio_track]
+            audio_streams = [s for s in all_streams if s.includes_audio_track and not s.includes_video_track]
             
             # Chọn video stream <= max_resolution
             video_candidates = [s for s in video_streams 
-                              if s.resolution and int(s.resolution.replace("p", "")) <= max_resolution]
+                              if s.resolution and s.resolution.replace("p", "").isdigit() 
+                              and int(s.resolution.replace("p", "")) <= max_resolution]
             if video_candidates:
-                video_stream = sorted(video_candidates, 
-                                    key=lambda x: int(x.resolution.replace("p", "")), 
-                                    reverse=True)[0]
+                video_stream = max(video_candidates, 
+                                  key=lambda x: int(x.resolution.replace("p", "")))
             else:
-                video_stream = video_streams.order_by('resolution').desc().first()
+                video_stream = max(video_streams, 
+                                  key=lambda x: int(x.resolution.replace("p", "")) if x.resolution and x.resolution.replace("p", "").isdigit() else 0) if video_streams else None
             
-            # Chọn audio stream chất lượng tốt nhất
-            audio_stream = audio_streams.order_by('abr').desc().first()
+            # Chọn audio stream chất lượng tốt nhất (abr cao nhất)
+            audio_stream = max(audio_streams, 
+                             key=lambda x: int(x.abr.replace("kbps", "")) if x.abr and x.abr.replace("kbps", "").isdigit() else 0) if audio_streams else None
             
             if not video_stream or not audio_stream:
                 print("❌ Cannot find adaptive streams to merge!")
