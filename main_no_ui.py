@@ -65,7 +65,21 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         if row not in file_inputs:
             raise Exception("File input not found!")
         
+        # QUAN TRỌNG: Lấy file_input mới nhất từ dict (có thể đã được cập nhật sau reload)
         file_input = file_inputs[row]
+        
+        # Kiểm tra file input còn hợp lệ không (tránh stale element)
+        try:
+            # Thử kiểm tra xem element còn tồn tại không
+            _ = file_input.tag_name
+        except:
+            # Nếu element bị stale, tìm lại
+            print(f"[Row {row}] ⚠️ File input bị stale, tìm lại...")
+            file_input = WebDriverWait(driver, 10, poll_frequency=0.2).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
+            )
+            file_inputs[row] = file_input  # Cập nhật lại
+        
         # TỐI ƯU: Chỉ gọi abspath nếu chưa phải absolute path (giảm overhead)
         abs_path = video_file_path if os.path.isabs(video_file_path) else os.path.abspath(video_file_path)
         file_input.send_keys(abs_path)
@@ -115,25 +129,42 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         upload_times['total_upload_time'] = (upload_end_total - upload_start_total).total_seconds()
         upload_times['upload_end_time'] = upload_end_total  # Lưu thời điểm upload xong
         
-        # TỐI ƯU: Reload trang nhanh nhất có thể - dùng refresh thay vì get lại (nhanh hơn)
+        # Reload trang và tìm lại file input (QUAN TRỌNG: Phải tìm lại sau mỗi lần upload)
         reload_start = datetime.now()
         def reload_upload_page():
-            # TỐI ƯU: Dùng refresh() thay vì get() để reload nhanh hơn (không phải load lại toàn bộ)
-            current_url = driver.current_url
-            if "tiktokstudio/upload" in current_url:
-                driver.refresh()  # Refresh nhanh hơn get()
-            else:
-                driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
-            # TỐI ƯU: Giảm timeout từ 30s xuống 10s, tăng poll_frequency lên 0.1s để tìm nhanh hơn
-            file_input = WebDriverWait(driver, 10, poll_frequency=0.1).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
+            # Luôn dùng get() để đảm bảo trang load đúng, không dùng refresh() vì có thể không tìm thấy file input
+            driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
+            
+            # Đợi trang load xong trước khi tìm file input
+            WebDriverWait(driver, 10, poll_frequency=0.2).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
             )
-            print(f"[Row {row}] ✅ Reloaded upload page (file input ready)")
-            return file_input
+            
+            # Tìm file input với timeout đủ dài và retry nếu cần
+            try:
+                file_input = WebDriverWait(driver, 20, poll_frequency=0.2).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
+                )
+                # Đảm bảo file input có thể tương tác được
+                WebDriverWait(driver, 5, poll_frequency=0.2).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type=file]'))
+                )
+                print(f"[Row {row}] ✅ Reloaded upload page (file input ready)")
+                return file_input
+            except Exception as e:
+                print(f"[Row {row}] ⚠️ Không tìm thấy file input lần đầu, thử lại...")
+                # Retry: Đợi thêm một chút và thử lại
+                import time
+                time.sleep(2)
+                file_input = WebDriverWait(driver, 20, poll_frequency=0.2).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
+                )
+                print(f"[Row {row}] ✅ Tìm thấy file input sau retry")
+                return file_input
         
         new_file_input = await loop.run_in_executor(None, reload_upload_page)
         upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
-        file_inputs[row] = new_file_input
+        file_inputs[row] = new_file_input  # Cập nhật file input mới
         return True, upload_times
         
     except Exception as e:
@@ -291,12 +322,18 @@ async def main():
         print("⚠️ Số token ít hơn số channel, sẽ dùng lại theo vòng")
     
     # Khởi tạo HTTP client một lần để reuse (tiết kiệm ~5s mỗi request)
+    # TỐI ƯU: Tăng số connections để hỗ trợ đa luồng tốt hơn
     global http_client
+    num_channels = len(channels_data)
+    max_connections = max(20, num_channels * 2)  # Ít nhất 2 connections mỗi channel
     http_client = httpx.AsyncClient(
         timeout=300.0,
-        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        limits=httpx.Limits(
+            max_keepalive_connections=max_connections,
+            max_connections=max_connections * 2
+        )
     )
-    print("✅ HTTP client initialized (reusable)")
+    print(f"✅ HTTP client initialized (reusable, {max_connections} connections for {num_channels} channels)")
     
     # Parse channels (format: channel_id|profile_id hoặc chỉ channel_id)
     tasks = []
@@ -314,12 +351,21 @@ async def main():
         print(f"\n[{idx}] Channel: {channel_id} | Profile: {profile_id}")
         tasks.append(asyncio.create_task(run_profile_watcher(idx, profile_id, channel_id, tokens)))
     
-    print(f"\n✅ Starting {len(tasks)} watchers...")
+    print(f"\n✅ Starting {len(tasks)} watchers (ĐA LUỒNG - chạy song song)...")
+    print("="*60)
+    print(f"📊 Mỗi watcher sẽ theo dõi 1 kênh YouTube độc lập")
+    print(f"📊 Tất cả watchers chạy đồng thời (async/await)")
+    print(f"📊 Mỗi watcher có profile GenLogin riêng và không block nhau")
     print("="*60)
     
     try:
-        # Chạy tất cả đồng thời
-        await asyncio.gather(*tasks)
+        # Chạy tất cả đồng thời - ĐA LUỒNG (mỗi task chạy độc lập)
+        # Mỗi task sẽ:
+        # 1. Mở profile GenLogin riêng
+        # 2. Theo dõi YouTube channel riêng  
+        # 3. Download và upload video khi có video mới
+        # Tất cả chạy song song, không block nhau
+        await asyncio.gather(*tasks, return_exceptions=True)  # return_exceptions để không dừng khi 1 task lỗi
     finally:
         # Đóng http client khi kết thúc
         if http_client is not None:
