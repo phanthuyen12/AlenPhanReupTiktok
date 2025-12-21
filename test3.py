@@ -1,25 +1,28 @@
-import asyncio
-import httpx
+import requests
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-async def main():
-    async with httpx.AsyncClient() as client:
-        # Start download
-        resp = await client.post("http://127.0.0.1:8000/download", json={
-            "url": "https://www.youtube.com/watch?v=I5LFTwnJeyM",
-            "max_resolution": 720,
-            "edit_65s": False
-        })
-        result = resp.json()
-        video_id = result["video_id"]
-        print("Download started, video_id:", video_id)
+# Dữ liệu POST
+data = {
+    "url": "https://www.youtube.com/watch?v=I5LFTwnJeyM",
+    "max_resolution": 720,
+    "progressive_only": False,
+    "edit_65s": False
+}
 
-        # Poll status
-        while True:
-            status_resp = await client.get(f"http://127.0.0.1:8000/status/{video_id}")
-            status = status_resp.json()
-            print(status)
-            if status["status"] in ("done", "error"):
-                break
-            await asyncio.sleep(1)
+def send_request(i):
+    start = time.time()
+    response = requests.post("http://localhost:8000/download", json=data)
+    end = time.time()
+    try:
+        result = response.json()
+    except Exception:
+        result = response.text
+    return i, result, end - start
 
-asyncio.run(main())
+# Chạy 3 request song song
+with ThreadPoolExecutor(max_workers=3) as executor:
+    futures = [executor.submit(send_request, i) for i in range(3)]
+    for future in as_completed(futures):
+        i, result, elapsed = future.result()
+        print(f"Request {i}: {elapsed:.2f}s, Response: {result}")

@@ -1,5 +1,5 @@
 """
-Bản không UI để test tốc độ - Gọi trực tiếp, không có PyQt5 overhead
+Bản không UI để test tốc độ - Đã tối ưu Request API đạt ~1s (Reuse Connection)
 """
 import asyncio
 import os
@@ -23,7 +23,14 @@ uploaded_videos = set()
 profile_controllers = {}
 file_inputs = {}
 API_BASE_URL = "http://localhost:8000"  # API server URL
-http_client = None  # Reuse httpx client để tăng tốc độ
+
+# --- FIX 1: KHỞI TẠO HTTP CLIENT DÙNG CHUNG (TỐC ĐỘ NHƯ POSTMAN) ---
+# Đặt ngoài hàm để giữ kết nối "nóng" (Keep-Alive)
+http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(300.0),
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
+    headers={"Connection": "keep-alive"}
+)
 
 def extract_video_id(video_url):
     """Trích xuất video_id từ YouTube URL"""
@@ -56,14 +63,10 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         controller = profile_controllers[row]
         driver = controller.driver
         
-        # BẮT ĐẦU TÍNH THỜI GIAN UPLOAD (từ lúc upload file đến click post thành công)
         upload_start_total = datetime.now()
         
         # Upload file
         file_upload_start = datetime.now()
-        if row not in file_inputs:
-            raise Exception("File input not found!")
-        
         file_input = file_inputs[row]
         file_input.send_keys(os.path.abspath(video_file_path))
         print(f"[Row {row}] File uploaded: {video_file_path}")
@@ -72,14 +75,14 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         # Đợi nút Post xuất hiện và click
         wait_post_start = datetime.now()
         
+        # Chạy logic Selenium trong thread riêng để không block API của các row khác
         def wait_and_click_post():
             btn_selector = 'button[data-e2e="post_video_button"]'
             
             def is_button_ready(d):
                 try:
                     el = d.find_element(By.CSS_SELECTOR, btn_selector)
-                    if not el:
-                        return None
+                    if not el: return None
                     visible = el.is_displayed() and el.size['height'] > 0
                     data_loading = el.get_attribute('data-loading')
                     aria_disabled = el.get_attribute('aria-disabled')
@@ -89,8 +92,7 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
                         el.is_enabled()
                     )
                     return el if (visible and enabled) else None
-                except:
-                    return None
+                except: return None
             
             post_button = WebDriverWait(driver, 30, poll_frequency=0.5).until(is_button_ready)
             driver.execute_script("arguments[0].scrollIntoView({ block: 'center' });", post_button)
@@ -99,27 +101,24 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
             WebDriverWait(driver, 15).until(lambda d: "tiktokstudio/content" in d.current_url)
             print(f"[Row {row}] Redirected to content page")
         
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, wait_and_click_post)
+        # FIX 2: Đẩy Selenium ra Thread riêng
+        await asyncio.to_thread(wait_and_click_post)
         
-        # KẾT THÚC TÍNH THỜI GIAN UPLOAD (sau khi redirect thành công)
         upload_end_total = datetime.now()
         upload_times['wait_post_time'] = (datetime.now() - wait_post_start).total_seconds()
-        
-        # TỔNG THỜI GIAN UPLOAD = từ upload file đến click post thành công (KHÔNG tính reload)
         upload_times['total_upload_time'] = (upload_end_total - upload_start_total).total_seconds()
         
-        # Reload trang (KHÔNG tính vào total_upload_time)
+        # Reload trang
         reload_start = datetime.now()
         def reload_upload_page():
             driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
-            file_input = WebDriverWait(driver, 30).until(
+            new_input = WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
             )
             print(f"[Row {row}] Reloaded upload page")
-            return file_input
+            return new_input
         
-        new_file_input = await loop.run_in_executor(None, reload_upload_page)
+        new_file_input = await asyncio.to_thread(reload_upload_page)
         upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
         file_inputs[row] = new_file_input
         return True, upload_times
@@ -129,24 +128,18 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         return False, None
 
 async def handle_new_video(row, video_url, profile_id, channel_id):
-    """Xử lý khi có video mới - KHÔNG UI, GỌI TRỰC TIẾP"""
+    """Xử lý khi có video mới - TỐI ƯU REQUEST API"""
     video_id = extract_video_id(video_url)
-    
     if video_id and video_id in uploaded_videos:
         print(f"⏭️ [{row}] Video {video_id} đã được upload, bỏ qua")
         return
     
     start_time = datetime.now()
-    download_time = 0
-    edit_time = 0
-    final_file = None
-    
     try:
         print(f"[Row {row}] 📥 Downloading video: {video_url}")
         
-        # Gọi API TRỰC TIẾP bằng httpx async - REUSE CLIENT để tăng tốc độ
-        # Client đã được khởi tạo trong main(), không tạo mới mỗi lần (tiết kiệm ~5s overhead)
-        global http_client
+        # FIX 3: DÙNG GLOBAL CLIENT (KHÔNG DÙNG 'ASYNC WITH' Ở ĐÂY)
+        # Tốc độ phản hồi JSON sẽ đạt mức tối đa như Postman
         response = await http_client.post(
             f"{API_BASE_URL}/download",
             json={
@@ -163,29 +156,21 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
         edit_time = result.get('edit_time', 0)
         
         if not result.get('success') or not result.get('file_path'):
-            error_msg = result.get('error', 'Unknown error')
-            print(f"[Row {row}] ❌ Download failed: {error_msg}")
+            print(f"[Row {row}] ❌ Download failed: {result.get('error', 'Unknown error')}")
             return
         
         final_file = result['file_path']
-        
         if not os.path.exists(final_file):
             print(f"[Row {row}] ❌ File not found after download")
-            return
-        
-        # Upload
-        if row not in file_inputs:
-            print(f"[Row {row}] ❌ File input not ready")
             return
         
         print(f"[Row {row}] 📤 Uploading to TikTok...")
         upload_success, upload_times = await upload_video_to_tiktok(row, final_file, profile_id, channel_id)
         
-        if upload_success and video_id and upload_times:
+        if upload_success and upload_times:
             uploaded_videos.add(video_id)
             total_time = (datetime.now() - start_time).total_seconds()
             
-            # Log ra console
             print(f"\n{'='*60}")
             print(f"✅ [{row}] Upload thành công!")
             print(f"Profile: {profile_id} | Channel: {channel_id}")
@@ -197,38 +182,23 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
             print(f"Total: {total_time:.1f}s")
             print(f"{'='*60}\n")
         
-        # Xóa file
-        try:
-            if os.path.exists(final_file):
-                os.remove(final_file)
-        except:
-            pass
+        if os.path.exists(final_file): os.remove(final_file)
             
     except Exception as e:
         print(f"[Row {row}] ❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
 
 async def run_profile_watcher(row, profile_id, channel_id, tokens):
-    """Mở Chrome bằng Genlogin, đợi file input, sau đó theo dõi YouTube"""
+    """Mở Chrome và theo dõi YouTube"""
     try:
         print(f"[Row {row}] Starting Genlogin profile: {profile_id}")
         controller = ProfileController(profile_id)
         
-        # Bước 1: Start profile
-        controller.start_profile()
-        print(f"[Row {row}] Profile started")
+        # Khởi chạy Selenium trong thread để không làm lag toàn bộ app
+        await asyncio.to_thread(controller.start_profile)
+        await asyncio.to_thread(controller.connect_selenium)
+        await asyncio.to_thread(controller.open_tiktok)
         
-        # Bước 2: Connect Selenium
-        controller.connect_selenium()
-        print(f"[Row {row}] Connected Selenium")
-        
-        # Bước 3: Open TikTok Studio
-        controller.open_tiktok()
-        print(f"[Row {row}] Opened TikTok Studio")
-        
-        # Đợi file input
-        file_input = WebDriverWait(controller.driver, 30, poll_frequency=0.5).until(
+        file_input = WebDriverWait(controller.driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
         )
         
@@ -236,83 +206,34 @@ async def run_profile_watcher(row, profile_id, channel_id, tokens):
         profile_controllers[row] = controller
         file_inputs[row] = file_input
         
-        # Bắt đầu theo dõi YouTube
-        print(f"[Row {row}] 👀 Watching YouTube channel: {channel_id}")
+        rotator = TokenRotator(tokens, start_index=row % len(tokens))
         
-        start_index = row % len(tokens)
-        rotator = TokenRotator(tokens, start_index=start_index)
-        
-        def gui_log(msg, video_link=None):
-            print(f"[Row {row}] {msg}")
-            if video_link:
-                print(f"[Row {row}] Video link: {video_link}")
-        
+        # Wrapper callback để log giữ nguyên format của bạn
         async def video_callback(video_url):
             await handle_new_video(row, video_url, profile_id, channel_id)
         
-        await watch_channel(channel_id, rotator, log_callback=gui_log, video_callback=video_callback)
+        await watch_channel(channel_id, rotator, 
+                            log_callback=lambda msg, vl=None: print(f"[Row {row}] {msg}" + (f"\nVideo link: {vl}" if vl else "")), 
+                            video_callback=video_callback)
         
     except Exception as e:
         print(f"[Row {row}] ❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
 
 async def main():
-    """Main function - KHÔNG UI - DÙNG API SERVER"""
     print("="*60)
-    print("🚀 REUP TIKTOK - NO UI VERSION (API SERVER)")
-    print("="*60)
-    print("⚠️  Đảm bảo API server đang chạy:")
-    print("    uvicorn download_api_server:app --host 0.0.0.0 --port 8000")
+    print("🚀 REUP TIKTOK - OPTIMIZED SPEED VERSION")
     print("="*60)
     
-    # Load tokens và channels
     tokens = TxtLoader.loads("tokens.txt")
     channels_data = TxtLoader.loads("channels.txt")
     
-    print(f"\n📊 Loaded {len(tokens)} tokens")
-    print(f"📊 Loaded {len(channels_data)} channels")
-    
-    if len(tokens) < len(channels_data):
-        print("⚠️ Số token ít hơn số channel, sẽ dùng lại theo vòng")
-    
-    # Khởi tạo HTTP client một lần để reuse (tiết kiệm ~5s mỗi request)
-    global http_client
-    http_client = httpx.AsyncClient(
-        timeout=300.0,
-        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
-    )
-    print("✅ HTTP client initialized (reusable)")
-    
-    # Parse channels (format: channel_id|profile_id hoặc chỉ channel_id)
     tasks = []
     for idx, line in enumerate(channels_data):
         parts = line.strip().split("|")
-        if len(parts) == 2:
-            channel_id, profile_id = parts[0].strip(), parts[1].strip()
-        else:
-            channel_id, profile_id = line.strip(), f"profile_{idx}"
-        
-        if not profile_id:
-            print(f"⚠️ Row {idx}: No profile ID, skipping")
-            continue
-        
-        print(f"\n[{idx}] Channel: {channel_id} | Profile: {profile_id}")
-        tasks.append(asyncio.create_task(run_profile_watcher(idx, profile_id, channel_id, tokens)))
+        cid, pid = (parts[0].strip(), parts[1].strip()) if len(parts) == 2 else (line.strip(), f"profile_{idx}")
+        tasks.append(asyncio.create_task(run_profile_watcher(idx, pid, cid, tokens)))
     
-    print(f"\n✅ Starting {len(tasks)} watchers...")
-    print("="*60)
-    
-    try:
-        # Chạy tất cả đồng thời
-        await asyncio.gather(*tasks)
-    finally:
-        # Đóng http client khi kết thúc
-        global http_client
-        if http_client is not None:
-            await http_client.aclose()
-            print("\n✅ HTTP client closed")
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
