@@ -70,7 +70,8 @@ class ProfileController:
         print(f"[Profile {self.profile_id}] TikTok opened, Title: {self.driver.title}")
         step_time = time.perf_counter() - step_start
         print(f"[Profile {self.profile_id}] ⏱️ [{step_time:.2f}s] Page loaded")
-        file_input = WebDriverWait(self.driver, 5,poll_frequency=0.1).until(
+        # TỐI ƯU: Tăng timeout và giữ poll_frequency cao để tìm file input nhanh
+        file_input = WebDriverWait(self.driver, 15, poll_frequency=0.1).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
             )
         if(file_input):

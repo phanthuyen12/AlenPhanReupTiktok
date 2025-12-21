@@ -95,11 +95,13 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
                 except:
                     return None
             
-            post_button = WebDriverWait(driver, 30, poll_frequency=0.5).until(is_button_ready)
+            # TỐI ƯU: Tăng poll frequency để check button nhanh hơn (0.2s thay vì 0.5s)
+            post_button = WebDriverWait(driver, 30, poll_frequency=0.2).until(is_button_ready)
             driver.execute_script("arguments[0].scrollIntoView({ block: 'center' });", post_button)
             post_button.click()
             print(f"[Row {row}] Post button clicked")
-            WebDriverWait(driver, 15).until(lambda d: "tiktokstudio/content" in d.current_url)
+            # TỐI ƯU: Giảm timeout và tăng poll frequency để check redirect nhanh hơn
+            WebDriverWait(driver, 10, poll_frequency=0.2).until(lambda d: "tiktokstudio/content" in d.current_url)
             print(f"[Row {row}] Redirected to content page")
         
         loop = asyncio.get_event_loop()
@@ -113,14 +115,20 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         upload_times['total_upload_time'] = (upload_end_total - upload_start_total).total_seconds()
         upload_times['upload_end_time'] = upload_end_total  # Lưu thời điểm upload xong
         
-        # Reload trang (KHÔNG tính vào total_upload_time)
+        # TỐI ƯU: Reload trang nhanh nhất có thể - dùng refresh thay vì get lại (nhanh hơn)
         reload_start = datetime.now()
         def reload_upload_page():
-            driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
-            file_input = WebDriverWait(driver, 30).until(
+            # TỐI ƯU: Dùng refresh() thay vì get() để reload nhanh hơn (không phải load lại toàn bộ)
+            current_url = driver.current_url
+            if "tiktokstudio/upload" in current_url:
+                driver.refresh()  # Refresh nhanh hơn get()
+            else:
+                driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
+            # TỐI ƯU: Giảm timeout từ 30s xuống 10s, tăng poll_frequency lên 0.1s để tìm nhanh hơn
+            file_input = WebDriverWait(driver, 10, poll_frequency=0.1).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
             )
-            print(f"[Row {row}] Reloaded upload page")
+            print(f"[Row {row}] ✅ Reloaded upload page (file input ready)")
             return file_input
         
         new_file_input = await loop.run_in_executor(None, reload_upload_page)
@@ -233,8 +241,8 @@ async def run_profile_watcher(row, profile_id, channel_id, tokens):
         controller.open_tiktok()
         print(f"[Row {row}] Opened TikTok Studio")
         
-        # Đợi file input
-        file_input = WebDriverWait(controller.driver, 30, poll_frequency=0.5).until(
+        # TỐI ƯU: Đợi file input với poll frequency cao để tìm nhanh hơn
+        file_input = WebDriverWait(controller.driver, 15, poll_frequency=0.1).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
         )
         
