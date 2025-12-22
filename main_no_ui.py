@@ -238,6 +238,7 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
                 seen_video_keys.add((channel_id, dedup_key))
             if video_id:
                 uploaded_videos.add(video_id)
+
             # Tính total_time = download + edit + upload (KHÔNG tính overhead và reload_time)
             # Chỉ tính các bước chính, không tính network latency và overhead giữa các bước
             total_time = download_time + edit_time + upload_times['total_upload_time']
@@ -253,6 +254,25 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
                   f"Processing: {upload_times['wait_post_time']:.1f}s)")
             print(f"Total: {total_time:.1f}s (Download + Edit + Upload, không tính overhead và reload)")
             print(f"{'='*60}\n")
+
+            # Ghi log vào history.txt
+            try:
+                from datetime import datetime as _dt
+                log_line = (
+                    f"{_dt.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+                    f"Profile: {profile_id} | Channel: {channel_id} | "
+                    f"Video: {video_url} | "
+                    f"Download: {download_time:.1f}s | "
+                    f"Edit: {edit_time:.1f}s | "
+                    f"Upload: {upload_times['total_upload_time']:.1f}s "
+                    f"(File: {upload_times['file_upload_time']:.1f}s, "
+                    f"Processing: {upload_times['wait_post_time']:.1f}s) | "
+                    f"Total: {total_time:.1f}s\n"
+                )
+                with open("history.txt", "a", encoding="utf-8") as f:
+                    f.write(log_line)
+            except Exception as _e:
+                print(f"[Row {row}] ⚠️ Không thể ghi history.txt: {_e}")
         
         # Xóa file
         try:
