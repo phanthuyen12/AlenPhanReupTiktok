@@ -3,6 +3,7 @@ Bản không UI để test tốc độ - Gọi trực tiếp, không có PyQt5 o
 """
 import asyncio
 import os
+import time
 from datetime import datetime
 from loader import TxtLoader
 from token_rotator import TokenRotator
@@ -87,46 +88,37 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         print(f"[Row {row}] File uploaded: {video_file_path}")
         upload_times['file_upload_time'] = (datetime.now() - file_upload_start).total_seconds()
         
-        # Đợi nút Post xuất hiện và click
+        # Đợi TikTok xử lý + cho phép user tự click nút Post nếu muốn
+        # YÊU CẦU MỚI: tối đa 30s, nếu user click Post sớm (redirect sang content) thì dừng ngay,
+        # nếu sau 30s vẫn chưa redirect thì coi như KHÔNG post và reload trang để chờ video mới.
         wait_post_start = datetime.now()
-        
-        def wait_and_click_post():
-            btn_selector = 'button[data-e2e="post_video_button"]'
-            
-            def is_button_ready(d):
+
+        def wait_for_manual_post_or_timeout():
+            max_wait = 30.0  # giây
+            poll = 0.5
+            start_ts = time.time()
+            print(f"[Row {row}] ⏳ Waiting up to {max_wait:.0f}s for user to click Post (or TikTok processing)...")
+            while True:
+                elapsed = time.time() - start_ts
+                if elapsed >= max_wait:
+                    print(f"[Row {row}] ⏰ Timeout {max_wait:.0f}s - no redirect to content page")
+                    return False  # user không bấm Post hoặc TikTok fail
                 try:
-                    el = d.find_element(By.CSS_SELECTOR, btn_selector)
-                    if not el:
-                        return None
-                    visible = el.is_displayed() and el.size['height'] > 0
-                    data_loading = el.get_attribute('data-loading')
-                    aria_disabled = el.get_attribute('aria-disabled')
-                    enabled = (
-                        (data_loading is None or data_loading == 'false') and
-                        (aria_disabled is None or aria_disabled == 'false') and
-                        el.is_enabled()
-                    )
-                    return el if (visible and enabled) else None
-                except:
-                    return None
-            
-            # TỐI ƯU: Tăng poll frequency để check button nhanh hơn (0.2s thay vì 0.5s)
-            post_button = WebDriverWait(driver, 30, poll_frequency=0.2).until(is_button_ready)
-            driver.execute_script("arguments[0].scrollIntoView({ block: 'center' });", post_button)
-            post_button.click()
-            print(f"[Row {row}] Post button clicked")
-            # TỐI ƯU: Giảm timeout và tăng poll frequency để check redirect nhanh hơn
-            WebDriverWait(driver, 10, poll_frequency=0.2).until(lambda d: "tiktokstudio/content" in d.current_url)
-            print(f"[Row {row}] Redirected to content page")
-        
+                    if "tiktokstudio/content" in driver.current_url:
+                        print(f"[Row {row}] ✅ Detected redirect to content page (user clicked Post)")
+                        return True
+                except Exception:
+                    pass
+                time.sleep(poll)
+
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, wait_and_click_post)
+        posted = await loop.run_in_executor(None, wait_for_manual_post_or_timeout)
         
-        # KẾT THÚC TÍNH THỜI GIAN UPLOAD (sau khi redirect thành công)
+        # KẾT THÚC TÍNH THỜI GIAN UPLOAD (sau khi user click Post HOẶC timeout 30s)
         upload_end_total = datetime.now()
         upload_times['wait_post_time'] = (datetime.now() - wait_post_start).total_seconds()
         
-        # TỔNG THỜI GIAN UPLOAD = từ upload file đến click post thành công (KHÔNG tính reload)
+        # TỔNG THỜI GIAN UPLOAD = từ upload file đến hết thời gian chờ 30s (KHÔNG tính reload)
         upload_times['total_upload_time'] = (upload_end_total - upload_start_total).total_seconds()
         upload_times['upload_end_time'] = upload_end_total  # Lưu thời điểm upload xong
         
@@ -166,10 +158,40 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
         new_file_input = await loop.run_in_executor(None, reload_upload_page)
         upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
         file_inputs[row] = new_file_input  # Cập nhật file input mới
-        return True, upload_times
+
+        # Nếu đã redirect sang content page trong vòng 30s → coi là upload thành công
+        # Nếu không redirect (timeout) → coi là thất bại, chỉ reload và chờ video mới
+        return (True if posted else False), upload_times
         
     except Exception as e:
+        # Bất kỳ lỗi nào trong quá trình upload (kể cả TikTok hiển thị 'Upload failed')
         print(f"[Row {row}] Upload error: {e}")
+
+        # Thử reload lại trang upload để chuẩn bị cho video tiếp theo
+        try:
+            controller = profile_controllers.get(row)
+            if controller and controller.driver:
+                driver = controller.driver
+
+                def reload_after_error():
+                    # Đưa về lại trang upload
+                    driver.get("https://www.tiktok.com/tiktokstudio/upload?from=webapp")
+                    WebDriverWait(driver, 10, poll_frequency=0.2).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                    file_input = WebDriverWait(driver, 20, poll_frequency=0.2).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
+                    )
+                    print(f"[Row {row}] 🔄 Reloaded upload page after error, file input ready")
+                    return file_input
+
+                loop = asyncio.get_event_loop()
+                new_input = await loop.run_in_executor(None, reload_after_error)
+                file_inputs[row] = new_input
+        except Exception as e2:
+            print(f"[Row {row}] ⚠️ Cannot reload upload page after error: {e2}")
+
+        # Trả về False để lần video này được coi là thất bại và sẽ chờ video mới
         return False, None
 
 async def handle_new_video(row, video_url, profile_id, channel_id):
