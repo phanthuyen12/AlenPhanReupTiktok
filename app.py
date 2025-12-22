@@ -233,111 +233,121 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         return None
 
     async def handle_new_video(self, row, video_url):
-        """Xử lý khi có video mới: download → edit (nếu cần) → upload lên TikTok - TỐI ƯU"""
+        """
+        Xử lý khi có video mới: download → (tùy chọn) edit → upload lên TikTok.
+        BẢN APP: gọi trực tiếp hàm download, KHÔNG dùng API server để giảm overhead.
+        """
         # Trích xuất video_id để kiểm tra đã upload chưa
         video_id = self.extract_video_id(video_url)
-        
         if video_id and video_id in self.uploaded_videos:
             print(f"⏭️ [{row}] Video {video_id} đã được upload, bỏ qua")
-            self.tbData.setItem(row, 3, QtWidgets.QTableWidgetItem("⏭️ Video đã upload, bỏ qua"))
+            self.update_status.emit(row, "⏭️ Video đã upload, bỏ qua")
             return
-        
+
         start_time = datetime.now()
         download_time = 0
         edit_time = 0
-        upload_time = 0
         video_file = None
         final_file = None
-        
+
         try:
-            # Lấy thông tin profile và channel
+            # Lấy thông tin profile và channel để log đẹp hơn
             profile_item = self.tbData.item(row, 1)
             channel_item = self.tbData.item(row, 2)
             profile_id = profile_item.text() if profile_item else "Unknown"
             channel_id = channel_item.text() if channel_item else "Unknown"
-            
-            # File input đã được tìm sẵn lúc mở TikTok Studio, không cần tìm lại
-            
-            self.update_status.emit(row, "📥 Downloading video...")
-            
-            # Download video - DÙNG API SERVER (nhanh hơn, không lag GUI)
+
+            # 1️⃣ DOWNLOAD VIDEO (GỌI TRỰC TIẾP) - không block GUI nhờ to_thread
+            self.update_status.emit(row, "📥 Đang tải video YouTube...")
             download_start = datetime.now()
-            
-            # Khởi tạo download client nếu chưa có
-            if self.download_client is None:
-                self.download_client = DownloadAPIClient()
-            
-            # Kiểm tra radio button: có edit video không?
-            need_edit = self.rdEdit65s.isChecked()
-            
-            # Gọi API để download (và edit nếu cần) - không block GUI
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                self.download_client.download_video,
+
+            # Thư mục download mặc định
+            download_path = "Downloads"
+
+            # Gọi trực tiếp utils.youtube_downloader.download_youtube_video trong thread phụ
+            video_file = await asyncio.to_thread(
+                download_youtube_video,
                 video_url,
-                720,  # max_resolution
-                False,  # progressive_only=False
-                need_edit  # edit_65s
+                download_path,
+                720,       # max_resolution
+                False      # progressive_only=False (cho phép adaptive nếu cần)
             )
-            
-            download_time = result.get('download_time', 0)
-            edit_time = result.get('edit_time', 0)
-            
-            if not result.get('success') or not result.get('file_path'):
-                error_msg = result.get('error', 'Unknown error')
-                self.update_status.emit(row, f"❌ Download failed: {error_msg[:30]}")
+
+            download_time = (datetime.now() - download_start).total_seconds()
+
+            if not video_file or not os.path.exists(video_file):
+                self.update_status.emit(row, "❌ Download failed (file not found)")
                 return
-            
-            final_file = result['file_path']
-            
-            if not os.path.exists(final_file):
-                self.update_status.emit(row, "❌ File not found after download")
-                return
-            
-            # Kiểm tra file input đã sẵn sàng (đã tìm lúc mở TikTok Studio)
+
+            final_file = video_file
+
+            # 2️⃣ EDIT (TUỲ CHỌN) - cắt 65s nếu bật checkbox
+            need_edit = self.rdEdit65s.isChecked()
+            if need_edit:
+                self.update_status.emit(row, "✂️ Đang cắt video 65s...")
+                edit_start = datetime.now()
+
+                edited_file = await asyncio.to_thread(edit_video_to_65s, video_file)
+                edit_time = (datetime.now() - edit_start).total_seconds()
+
+                if edited_file and os.path.exists(edited_file):
+                    final_file = edited_file
+                    # Xoá file gốc sau khi edit xong
+                    try:
+                        os.remove(video_file)
+                    except:
+                        pass
+                else:
+                    self.update_status.emit(row, "⚠️ Edit thất bại, dùng video gốc")
+
+            # 3️⃣ KIỂM TRA FILE INPUT & UPLOAD
             if row not in self.file_inputs:
                 self.update_status.emit(row, "❌ File input not ready")
                 return
-            
-            self.update_status.emit(row, "📤 Uploading to TikTok...")
-            
-            # Upload video lên TikTok
+
+            if not os.path.exists(final_file):
+                self.update_status.emit(row, "❌ File not found before upload")
+                return
+
+            self.update_status.emit(row, "📤 Đang upload lên TikTok...")
+
+            # Upload video lên TikTok (dùng logic upload tối ưu)
             upload_success, upload_times = await self.upload_video_to_tiktok(row, final_file)
-            
-            # Chỉ đánh dấu đã upload và log nếu upload thành công
+
+            # 4️⃣ LOG VÀ DỌN DẸP
             if upload_success and video_id and upload_times:
-                # Đánh dấu video đã được upload
+                # Đánh dấu video đã upload
                 self.uploaded_videos.add(video_id)
-                
-                # Tính thời gian tổng
-                total_time = (datetime.now() - start_time).total_seconds()
-                
-                # Log chi tiết vào txtLog với thời gian upload chi tiết (bỏ Reload time)
+
+                # Tính tổng thời gian (không tính reload)
+                total_time = download_time + edit_time + upload_times["total_upload_time"]
+
+                # Log chi tiết vào txtLog
                 log_message = (
-                    f"{profile_id} | {channel_id} | {video_url} | "
-                    f"Download: {download_time:.1f}s | "
-                    f"Edit: {edit_time:.1f}s | "
-                    f"Upload: {upload_times['total_upload_time']:.1f}s "
+                    f"{profile_id} | {channel_id} | {video_url}\n"
+                    f"  • Download: {download_time:.1f}s\n"
+                    f"  • Edit: {edit_time:.1f}s\n"
+                    f"  • Upload: {upload_times['total_upload_time']:.1f}s "
                     f"(File: {upload_times['file_upload_time']:.1f}s, "
-                    f"Processing: {upload_times['wait_post_time']:.1f}s, "
-                    f"ClickPost: {upload_times['post_click_time']:.1f}s) | "
-                    f"Total: {total_time:.1f}s\n"
+                    f"Processing: {upload_times['wait_post_time']:.1f}s)\n"
+                    f"  • Total (không tính reload): {total_time:.1f}s\n"
+                    f"{'-'*40}"
                 )
                 self.txtLog.appendPlainText(log_message)
-            
-            # Xóa file sau khi upload xong (tùy chọn)
+                self.update_status.emit(row, "✅ Hoàn thành 1 vòng Download + Upload")
+
+            # Xoá file tạm sau khi upload xong (nếu còn)
             try:
-                if os.path.exists(final_file):
+                if final_file and os.path.exists(final_file):
                     os.remove(final_file)
             except:
                 pass
-            
+
         except Exception as e:
             error_msg = f"Error handling video: {str(e)}"
             print(f"[Row {row}] {error_msg}")
-            self.update_status.emit(row, f"❌ {error_msg[:50]}")
-            
+            self.update_status.emit(row, f"❌ {error_msg[:60]}")
+
             # Cleanup files nếu có lỗi
             for f in [video_file, final_file]:
                 if f and os.path.exists(f):

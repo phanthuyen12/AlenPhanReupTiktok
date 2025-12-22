@@ -143,8 +143,8 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
             # Tìm file input với timeout đủ dài và retry nếu cần
             try:
                 file_input = WebDriverWait(driver, 20, poll_frequency=0.2).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
-                )
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
+            )
                 # Đảm bảo file input có thể tương tác được
                 WebDriverWait(driver, 5, poll_frequency=0.2).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type=file]'))
@@ -160,7 +160,7 @@ async def upload_video_to_tiktok(row, video_file_path, profile_id, channel_id):
                     EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type=file]'))
                 )
                 print(f"[Row {row}] ✅ Tìm thấy file input sau retry")
-                return file_input
+            return file_input
         
         new_file_input = await loop.run_in_executor(None, reload_upload_page)
         upload_times['reload_time'] = (datetime.now() - reload_start).total_seconds()
@@ -197,15 +197,15 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
         global http_client
         # TỐI ƯU: Tạo JSON payload một lần, không tạo dict mỗi lần
         json_payload = {
-            "url": video_url,
-            "max_resolution": MAX_RESOLUTION,
-            "progressive_only": False,
-            "edit_65s": EDIT_VIDEO
-        }
+                    "url": video_url,
+                    "max_resolution": MAX_RESOLUTION,
+                    "progressive_only": False,
+                    "edit_65s": EDIT_VIDEO
+                }
         response = await http_client.post(f"{API_BASE_URL}/download", json=json_payload)
-        response.raise_for_status()
+            response.raise_for_status()
         # TỐI ƯU: Parse JSON một lần
-        result = response.json()
+            result = response.json()
         
         download_time = result.get('download_time', 0)
         edit_time = result.get('edit_time', 0)
