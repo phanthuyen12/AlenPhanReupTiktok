@@ -19,9 +19,10 @@ EDIT_VIDEO = True  # True = edit 65s, False = không edit
 MAX_RESOLUTION = 720
 
 # Lưu trữ
-uploaded_videos = set()
-profile_controllers = {}
-file_inputs = {}
+uploaded_videos = set()          # Chỉ theo video_id (toàn cục, tránh trùng)
+seen_video_keys = set()          # (channel_id, video_id/url) để chắc chắn không lặp
+profile_controllers = {}         # row -> ProfileController
+file_inputs = {}                 # row -> input[type=file] element
 API_BASE_URL = "http://localhost:8000"  # API server URL
 http_client = None  # Reuse httpx client để tăng tốc độ
 
@@ -175,8 +176,15 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
     """Xử lý khi có video mới - KHÔNG UI, GỌI TRỰC TIẾP"""
     video_id = extract_video_id(video_url)
     
+    # Tạo key duy nhất cho video theo channel (phòng trường hợp extract_video_id bị fail trả về None)
+    dedup_key = video_id or video_url
+    global seen_video_keys
+    if dedup_key and (channel_id, dedup_key) in seen_video_keys:
+        print(f"⏭️ [{row}] Video đã được xử lý trước đó cho channel {channel_id}, bỏ qua")
+        return
+    
     if video_id and video_id in uploaded_videos:
-        print(f"⏭️ [{row}] Video {video_id} đã được upload, bỏ qua")
+        print(f"⏭️ [{row}] Video {video_id} đã được upload (uploaded_videos), bỏ qua")
         return
     
     start_time = datetime.now()
@@ -197,15 +205,15 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
         global http_client
         # TỐI ƯU: Tạo JSON payload một lần, không tạo dict mỗi lần
         json_payload = {
-                    "url": video_url,
-                    "max_resolution": MAX_RESOLUTION,
-                    "progressive_only": False,
-                    "edit_65s": EDIT_VIDEO
-                }
+            "url": video_url,
+            "max_resolution": MAX_RESOLUTION,
+            "progressive_only": False,
+            "edit_65s": EDIT_VIDEO
+        }
         response = await http_client.post(f"{API_BASE_URL}/download", json=json_payload)
-            response.raise_for_status()
+        response.raise_for_status()
         # TỐI ƯU: Parse JSON một lần
-            result = response.json()
+        result = response.json()
         
         download_time = result.get('download_time', 0)
         edit_time = result.get('edit_time', 0)
@@ -224,8 +232,12 @@ async def handle_new_video(row, video_url, profile_id, channel_id):
         print(f"[Row {row}] 📤 Uploading to TikTok...")
         upload_success, upload_times = await upload_video_to_tiktok(row, final_file, profile_id, channel_id)
         
-        if upload_success and video_id and upload_times:
-            uploaded_videos.add(video_id)
+        if upload_success and upload_times:
+            # Đánh dấu video đã xử lý để không lặp lại (theo session)
+            if dedup_key:
+                seen_video_keys.add((channel_id, dedup_key))
+            if video_id:
+                uploaded_videos.add(video_id)
             # Tính total_time = download + edit + upload (KHÔNG tính overhead và reload_time)
             # Chỉ tính các bước chính, không tính network latency và overhead giữa các bước
             total_time = download_time + edit_time + upload_times['total_upload_time']
@@ -311,9 +323,33 @@ async def main():
     print("    uvicorn download_api_server:app --host 0.0.0.0 --port 8000")
     print("="*60)
     
+    # ---- CẤU HÌNH CLI THÂN THIỆN ----
+    # Chọn file tokens & channels (Enter = mặc định)
+    try:
+        tokens_path = input("📂 Nhập đường dẫn tokens.txt (Enter = tokens.txt): ").strip() or "tokens.txt"
+        channels_path = input("📂 Nhập đường dẫn channels.txt (Enter = channels.txt): ").strip() or "channels.txt"
+        
+        # Chọn có edit 65s hay không
+        global EDIT_VIDEO
+        edit_choice = input(f"✂️ Edit video 65s? (1 = Có, 0 = Không, Enter = {1 if EDIT_VIDEO else 0}): ").strip()
+        if edit_choice == "1":
+            EDIT_VIDEO = True
+        elif edit_choice == "0":
+            EDIT_VIDEO = False
+    except EOFError:
+        # Trường hợp chạy không có stdin (VD: scheduler), dùng mặc định
+        tokens_path = "tokens.txt"
+        channels_path = "channels.txt"
+
+    print("\n📌 Cấu hình hiện tại:")
+    print(f"   • Tokens file  : {tokens_path}")
+    print(f"   • Channels file: {channels_path}")
+    print(f"   • Edit 65s     : {'Có' if EDIT_VIDEO else 'Không'}")
+    print("="*60)
+    
     # Load tokens và channels
-    tokens = TxtLoader.loads("tokens.txt")
-    channels_data = TxtLoader.loads("channels.txt")
+    tokens = TxtLoader.loads(tokens_path)
+    channels_data = TxtLoader.loads(channels_path)
     
     print(f"\n📊 Loaded {len(tokens)} tokens")
     print(f"📊 Loaded {len(channels_data)} channels")
