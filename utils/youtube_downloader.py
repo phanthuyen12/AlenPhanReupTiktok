@@ -1,27 +1,47 @@
+import os
+import re
+import time
+import threading
+import subprocess
 from pytubefix import YouTube
 from pytubefix.exceptions import VideoUnavailable, AgeRestrictedError
-import os
-import time
-import subprocess
-import re
-import threading
 
+# -----------------------
+# Load config
+# -----------------------
+def load_config(file="config.txt"):
+    config = {}
+    if not os.path.exists(file):
+        print(f"❌ Không tìm thấy {file}")
+        return config
+    with open(file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                config[key.strip()] = value.strip()
+    return config
+
+config = load_config()
+FFMPEG_PATH = config.get("ffmpeg_path")
+DOWNLOAD_PATH = config.get("download_path", "Downloads")
+MAX_RESOLUTION = int(config.get("max_resolution", 720))
+
+# -----------------------
+# Utility functions
+# -----------------------
 def sanitize_filename(name):
-    return re.sub(r'[\\/*?:"<>|]', "", name)
+    """Loại bỏ ký tự đặc biệt, emoji"""
+    return re.sub(r'[\\/*?:"<>|#]', "_", name)
 
 def get_ffmpeg_path():
-    """Lấy đường dẫn ffmpeg.exe từ thư mục bin (giống chromedriver)"""
-    # Lấy thư mục gốc của project
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_dir)
-    ffmpeg_path = os.path.join(project_root, "bin", "ffmpeg.exe")
-    
-    # Kiểm tra file tồn tại
-    if os.path.exists(ffmpeg_path):
-        return ffmpeg_path
-    
-    # Fallback: thử dùng ffmpeg từ PATH nếu không tìm thấy
+    if FFMPEG_PATH and os.path.exists(FFMPEG_PATH):
+        return FFMPEG_PATH
+    print("❌ Không tìm thấy ffmpeg.exe trong config, fallback dùng PATH")
     return "ffmpeg"
+
 
 def merge_audio_video(video_file, audio_file, output_file):
     """Tối ưu merge với ffmpeg - dùng copy codec để nhanh hơn"""
